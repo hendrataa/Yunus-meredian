@@ -704,6 +704,37 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
   log("startup", "Non-TTY mode — starting cron cycles immediately.");
   startCronJobs();
   maybeRunMissedBriefing().catch(() => {});
+
+  // Start Telegram polling in non-TTY mode (PM2)
+  startPolling(async (text) => {
+    if (_managementBusy || _screeningBusy) {
+      sendMessage("Agent is busy right now — try again in a moment.").catch(() => {});
+      return;
+    }
+
+    if (text === "/briefing") {
+      try {
+        const briefing = await generateBriefing();
+        await sendHTML(briefing);
+      } catch (e) {
+        await sendMessage(`Error: ${e.message}`).catch(() => {});
+      }
+      return;
+    }
+
+    try {
+      log("telegram", `Incoming: ${text}`);
+      const hasCloseIntent = /\bclose\b|\bsell\b|\bexit\b|\bwithdraw\b/i.test(text);
+      const isDeployRequest = !hasCloseIntent && /\bdeploy\b|\bopen position\b|\blp into\b|\badd liquidity\b/i.test(text);
+      const agentRole = isDeployRequest ? "SCREENER" : "GENERAL";
+      const { content } = await agentLoop(text, config.llm.maxSteps, sessionHistory, agentRole, config.llm.generalModel);
+      appendHistory(text, content);
+      await sendMessage(content);
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+  });
+
   (async () => {
     try {
       await agentLoop(`
