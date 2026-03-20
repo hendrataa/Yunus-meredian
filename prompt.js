@@ -71,61 +71,6 @@ Current screening timeframe: ${config.screening.timeframe} — interpret all met
     basePrompt += `
 Your goal: Find high-yield, high-volume pools and DEPLOY capital.
 
-═══════════════════════════════════════════
- STRATEGY: SOL-SIDED SPOT DLMM
-═══════════════════════════════════════════
-
-POSITION TYPE: One-sided SOL SPOT DLMM only. NEVER Bid/Ask. NEVER dual-sided.
-TARGET: PumpSwap memecoins breaking ATH or 15min Supertrend turning bullish.
-PARAMS: Step 100, Base Fee 2–5%, TVL ~$2500–3000.
-
-PRIME RULES:
-- Picking the right coin is 90% of the strategy.
-- Good coins are obvious and easily visible. Don't look too hard.
-- No position is better than a bad position. Be patient.
-- Boredom is the enemy. Discipline is the edge.
-- The right opportunity can take 1–2+ days of waiting. That is fine.
-
-ENTRY SIGNALS (any one = enter):
-- Coin breaks 15min Supertrend bullish → open SOL-sided SPOT position
-- Coin makes new ATH → open new position or extend existing
-
-EXIT SIGNALS (any one = exit):
-- Big green candle appears → close into strength immediately
-- Price starts chopping sideways → close, wait for new ATH before re-entry
-- Coin dumps then bounces back → close at bounce, take fees and profit
-- Price looks toppy or overextended → exit or stay out
-
-SKIP SIGNALS (do not enter):
-- Fast dump with no recovery (no volume = no fees)
-- Boring market with nothing running → stay idle in SOL
-- Coin entered out of boredom, not conviction
-
-COIN FILTER — REQUIRED (all must pass):
-- Breaking or making a new ATH on the chart
-- 15min Supertrend signal turned bullish
-- Good volume visible (real pumps, not dead chart)
-- Coin is easily visible and trending — good coins are obvious
-- Healthy dip/bounce pattern on price action
-- Listed on PumpSwap
-
-COIN FILTER — DISQUALIFIERS (any one = skip):
-- Low volume or dying chart
-- Fast dump with no recovery
-- No conviction — boredom trade
-
-REAL TRADE EXAMPLES (use these as calibration):
-- LIFE/SOL: +16.27% in 11.3h — best runner, kept making ATH after ATH, exited when toppy
-- BAGWORKOOR/SOL: +9.71% in 2.3h — broke 15min Supertrend, V-shaped dump/recovery, exited when trend felt over
-- INCOME/SOL: +8.62% in 2.7h — runner making ATHs, exited into big green bar as price went sideways
-- INCOME/SOL: +7.1% in 4.2h — continued chasing INCOME as it made new ATHs, closed at sideways chop
-- ROSIE/SOL: +5.96% in 5h — earned fees on dump, exited at bounce, downtrend on Supertrend
-- 01001000/SOL: +4.22% in 1h — broke ATH on boring day, earned fees on dump, exited at pump recovery
-
-Average performance: 9.56% PnL per position, ~$250 profit on ~$2700 TVL.
-
-═══════════════════════════════════════════
-
 1. SCREEN: Use get_top_candidates or discover_pools.
 2. STUDY: Call study_top_lpers. Look for high win rates and sustainable volume.
 3. MEMORY: Before deploying to any pool, call get_pool_memory to check if you've been there before.
