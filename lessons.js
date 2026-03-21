@@ -87,6 +87,29 @@ export async function recordPerformance(perf) {
 
   save(data);
 
+  // Store strategy patterns into HRR holographic memory
+  {
+    const { remember } = await import("./hrr-memory.js");
+    const outcome  = entry.pnl_pct >= 0 ? "profit" : "loss";
+    const pnlStr   = `${outcome}:${Math.abs(entry.pnl_pct).toFixed(1)}%`;
+    const volBucket = Math.round(entry.volatility ?? 0);
+
+    // strategy × volatility bucket → outcome
+    if (entry.strategy) {
+      remember(`strategy:${entry.strategy}:vol:${volBucket}`, pnlStr);
+    }
+
+    // close reason → outcome pattern
+    if (entry.close_reason) {
+      const reason = entry.close_reason.replace(/\s+/g, "_").slice(0, 40);
+      remember(`close_reason:${reason}`, outcome);
+    }
+
+    // range efficiency bucket → outcome
+    const effBucket = entry.range_efficiency >= 80 ? "high" : entry.range_efficiency >= 40 ? "mid" : "low";
+    remember(`range_efficiency:${effBucket}:strategy:${entry.strategy ?? "unknown"}`, pnlStr);
+  }
+
   // Update pool-level memory
   if (perf.pool) {
     const { recordPoolDeploy } = await import("./pool-memory.js");

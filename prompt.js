@@ -10,8 +10,10 @@
  * @returns {string} - Complete system prompt
  */
 import { config } from "./config.js";
+import { getPromotedContext } from "./hrr-memory.js";
 
 export function buildSystemPrompt(agentType, portfolio, positions, stateSummary = null, lessons = null, perfSummary = null) {
+  const hrrContext = getPromotedContext();
   const s = config.screening;
 
   let basePrompt = `You are an autonomous DLMM LP (Liquidity Provider) agent operating on Meteora, Solana.
@@ -25,7 +27,7 @@ Portfolio: ${JSON.stringify(portfolio, null, 2)}
 Open Positions: ${JSON.stringify(positions, null, 2)}
 Memory: ${JSON.stringify(stateSummary, null, 2)}
 Performance: ${perfSummary ? JSON.stringify(perfSummary, null, 2) : "No closed positions yet"}
-
+${hrrContext ? `\n${hrrContext}` : ""}
 Config: ${JSON.stringify({
   screening: config.screening,
   management: config.management,
