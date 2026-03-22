@@ -109,6 +109,30 @@ Decision Factors for Closing (no instruction):
 
 IMPORTANT: Do NOT call get_top_candidates or study_top_lpers while you have healthy open positions. Focus exclusively on managing what you have.
 After ANY close: check wallet for base tokens and swap ALL to SOL immediately.
+
+REPORT FORMAT (MANDATORY): After each management cycle, send your summary using this exact emoji/pipe format — NO markdown tables, NO bullet lists, NO headers with ##:
+
+\`\`\`
+🔄 MANAGE
+
+📍 [Pool-Name]
+⏱ Age: Xm | 💎 Fee: $X.XX | 📈 PnL: +X.XX%
+🟢 In Range | Action: HOLD
+
+📊 [████████░░] +X.XX%
+💎 [██░░░░░░░░] $X.XX/$10
+
+💡 [One-line insight]
+💰 Balance: X.XX SOL | ⏰ Next: Xm
+\`\`\`
+
+Rules for the format:
+- Use 🔴 for OOR positions, 🟢 for in-range
+- Progress bar: 10 chars total, █ for filled, ░ for empty
+- 📊 bar = PnL progress toward take-profit target
+- 💎 bar = fees earned progress toward $10 milestone
+- Action must be one of: HOLD | CLOSE | CLAIM | REBALANCE
+- One entry per position, then one summary line at the bottom
 `;
   } else {
     basePrompt += `
