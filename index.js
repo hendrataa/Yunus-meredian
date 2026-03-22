@@ -11,7 +11,7 @@ import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { registerCronRestarter } from "./tools/executor.js";
 import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isEnabled as telegramEnabled } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
-import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition } from "./state.js";
+import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, updatePnlAndCheckExits } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -157,6 +157,21 @@ export function startCronJobs() {
         return lines.join("\n");
       }).join("\n\n");
 
+      // Trailing TP / stop loss pre-check
+      let exitAlerts = "";
+      try {
+        for (const p of positionData) {
+          if (p.pnl?.pnl_pct != null) {
+            const exitAction = updatePnlAndCheckExits(p.position, p.pnl.pnl_pct, config);
+            if (exitAction) {
+              exitAlerts += `\n⚠ ${p.pair}: ${exitAction}`;
+              log("exit_check", `${p.pair}: ${exitAction}`);
+            }
+          }
+        }
+        if (exitAlerts) exitAlerts = `\n\nEXIT ALERTS (CLOSE THESE IMMEDIATELY):${exitAlerts}\n`;
+      } catch { /* best-effort */ }
+
       // Hive mind pattern consensus (if enabled)
       let hivePatterns = "";
       try {
@@ -171,7 +186,7 @@ export function startCronJobs() {
       } catch { /* hive is best-effort */ }
 
       const { content } = await agentLoop(`
-MANAGEMENT CYCLE — ${positions.length} position(s)
+MANAGEMENT CYCLE — ${positions.length} position(s)${exitAlerts}
 
 PRE-LOADED POSITION DATA (no fetching needed):
 ${positionBlocks}${hivePatterns}

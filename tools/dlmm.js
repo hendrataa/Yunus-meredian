@@ -110,8 +110,12 @@ export async function deployPosition({
   pool_address = normalizeMint(pool_address);
   const activeStrategy = strategy || config.strategy.strategy;
 
+  if (!["bid_ask", "spot"].includes(activeStrategy)) {
+    throw new Error("Only 'bid_ask' or 'spot' strategies are allowed.");
+  }
+
   const activeBinsBelow = bins_below ?? config.strategy.binsBelow;
-  const activeBinsAbove = bins_above ?? 0;
+  const activeBinsAbove = bins_above ?? (activeStrategy === "spot" ? activeBinsBelow : 0);
 
   if (process.env.DRY_RUN === "true") {
     const totalBins = activeBinsBelow + activeBinsAbove;
@@ -535,19 +539,21 @@ export async function claimFees({ position_address }) {
     poolCache.delete(poolAddress.toString());
     const pool = await getPool(poolAddress);
 
-    const positionData = await pool.getPosition(new PublicKey(position_address));
+    const positionPubKey = new PublicKey(position_address);
+    const positionData = await pool.getPosition(positionPubKey);
     const txs = await pool.claimSwapFee({
       owner: wallet.publicKey,
       position: positionData,
     });
 
-    if (!txs || txs.length === 0) {
+    if (!txs || (Array.isArray(txs) && txs.length === 0)) {
       return { success: false, error: "No fees to claim — transaction is empty" };
     }
 
+    const txArr = Array.isArray(txs) ? txs : [txs];
     const txHashes = [];
-    for (const tx of txs) {
-      const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet]);
+    for (const tx of txArr) {
+      const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet], { skipPreflight: true });
       txHashes.push(txHash);
     }
     log("claim", `SUCCESS txs: ${txHashes.join(", ")}`);
@@ -583,18 +589,16 @@ export async function closePosition({ position_address }) {
     // ─── Step 1: Claim Fees (to clear account state) ───────────
     try {
       log("close", `Step 1: Claiming fees for ${position_address}`);
-      const positionData = await pool.getPosition(positionPubKey);
+      const claimPositionData = await pool.getPosition(positionPubKey);
       const claimTxs = await pool.claimSwapFee({
         owner: wallet.publicKey,
-        position: positionData,
+        position: claimPositionData,
       });
-      if (claimTxs && claimTxs.length > 0) {
-        for (const tx of claimTxs) {
-          const claimHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet]);
-          txHashes.push(claimHash);
-        }
-        log("close", `Step 1 OK: ${txHashes.join(", ")}`);
+      for (const tx of Array.isArray(claimTxs) ? claimTxs : [claimTxs]) {
+        const claimHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet], { skipPreflight: true });
+        txHashes.push(claimHash);
       }
+      log("close", `Step 1 OK: ${txHashes.join(", ")}`);
     } catch (e) {
       log("close_warn", `Step 1 (Claim) failed or nothing to claim: ${e.message}`);
     }

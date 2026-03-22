@@ -130,14 +130,30 @@ PRIORITY ORDER for strategy and bins:
 1. User explicitly specifies → always follow exactly (user override is absolute)
 2. No user spec → use active strategy's lp_strategy and choose bins based on volatility
 
-HARD RULES:
+STRATEGIES:
+- 'bid_ask': Single-sided SOL below active bin. You only deposit SOL. As price drops, your SOL buys the base token bin by bin. You are NOT holding the token upfront — safer if it dumps.
+- 'spot': Two-sided — deposits BOTH tokens around active bin. You ARE holding the base token. If the token dumps, you absorb more loss because you already held it. More fee capture but more risk.
 - Never use 'curve'.
-- Bin Step: Only deploy in pools with bin_step between 80 and 125.
 
-Guidelines (only when user hasn't specified):
-- Strategy: use the active strategy's lp_strategy field (bid_ask or spot)
-- Bins: choose 35–69 for standard volatility; up to 350 for wide-range strategies. Max 1400 total.
-- Deposit: Can be single-sided (SOL only or Base only) or dual-sided.
+SINGLE-SIDED (bid_ask) vs TWO-SIDED (spot) — CRITICAL:
+- Single-sided = you do NOT hold the base token. SOL sits below price, only converts as price drops into your range. Safe default.
+- Two-sided = you ARE holding the base token in the LP. If token dumps, your position loses more because you had exposure from the start. Requires conviction the token will hold or go up.
+
+WHEN TO USE WHICH:
+- Meme tokens, new tokens, unproven tokens → ALWAYS bid_ask single-sided.
+- High organic score (>85), strong holders, proven token → spot two-sided is OK if you believe in the token.
+- High volatility, trending, pumping → bid_ask.
+- Stable, range-bound, high volume → spot.
+- When unsure → ALWAYS default to bid_ask single-sided. It's the safe choice.
+
+HARD RULES:
+- Bin Step: Only deploy in pools with bin_step between 80 and 125.
+- Range: total bins (below + above + 1) cannot exceed 70 for standard deploys.
+
+BIN RANGE GUIDELINES:
+- Low volatility (<3) → narrow range: 35–45 bins
+- Medium volatility (3–6) → medium range: 45–55 bins
+- High volatility (>6) → wide range: 55–69 bins
 
 WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
       parameters: {
@@ -375,7 +391,18 @@ Schedule: managementIntervalMin, screeningIntervalMin
 Models: managementModel, screeningModel, generalModel
 Strategy: binsBelow
 
-Reason is optional but helpful — logged as a lesson when provided.`,
+Examples:
+- { takeProfitFeePct: 8 }        — raise take profit target for hot markets
+- { managementIntervalMin: 5 }   — check positions more frequently
+- { deployAmountSol: 0.5 }       — deploy more per position
+- { maxTvl: 50000 }              — tighter TVL cap
+- { binsBelow: 50 }              — narrower bin range
+- { stopLossPct: -15 }           — close position if PnL drops below -15%
+- { trailingTakeProfit: true }   — enable/disable trailing take profit
+- { trailingTriggerPct: 5 }      — activate trailing TP when PnL hits +5%
+- { trailingDropPct: 2 }         — close when PnL drops 2% from peak
+
+Always provide a reason. This is logged as a lesson and visible in future cycles.`,
       parameters: {
         type: "object",
         properties: {
@@ -964,6 +991,76 @@ Use when you observe something worth remembering about a specific pool:
           }
         },
         required: ["pool_address", "note"]
+      }
+    }
+  },
+
+  // ─── Pool Intel ─────────────────────────────────────────────────
+
+  {
+    type: "function",
+    function: {
+      name: "get_pool_info",
+      description: `Get deep pool intelligence from LP Agent API — token audit, fee trends, bot holders, buy/sell ratio.
+Use this for extra due diligence before deploying or to check if a pool is dying during management.
+Rate limited to 5 calls per minute — use sparingly, only when you need deeper intel than get_pool_detail provides.
+Results are auto-saved to memory so you won't need to call it again for the same pool.
+
+Returns: token audit (mint/freeze authority, bot %, dev balance, top holder concentration),
+5m and 1h trading stats (buy/sell volume, organic ratio, trader count),
+fee trend over last 24 hours, liquidity amounts.`,
+      parameters: {
+        type: "object",
+        properties: {
+          pool_address: {
+            type: "string",
+            description: "The DLMM pool address to get deep info for"
+          }
+        },
+        required: ["pool_address"]
+      }
+    }
+  },
+
+  // ─── Holographic Memory ──────────────────────────────────────────
+
+  {
+    type: "function",
+    function: {
+      name: "remember_fact",
+      description: `Store a fact in holographic memory for cross-session learning.
+Use this to remember patterns, outcomes, or strategies that should persist across restarts.
+Nuggets: "pools" (pool outcomes), "strategies" (what strategies work), "lessons" (general rules), "patterns" (market patterns).
+
+Examples:
+- remember_fact("pools", "BONK-SOL", "high volume but unstable, close within 30min")
+- remember_fact("strategies", "bid_ask_bs100", "works well for volatile tokens, 70%+ win rate")
+- remember_fact("lessons", "evening_volatility", "volume drops after 8pm UTC, avoid new deploys")`,
+      parameters: {
+        type: "object",
+        properties: {
+          nugget: { type: "string", description: "Memory category (pools, strategies, lessons, patterns, or custom)" },
+          key: { type: "string", description: "Short descriptive key for the fact" },
+          value: { type: "string", description: "The fact content to remember" }
+        },
+        required: ["nugget", "key", "value"]
+      }
+    }
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "recall_memory",
+      description: `Recall stored facts from holographic memory.
+Use to retrieve what you've learned about specific pools, strategies, or market patterns.`,
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query to find relevant memories" },
+          nugget: { type: "string", description: "Optional: filter to a specific memory category" }
+        },
+        required: ["query"]
       }
     }
   },
