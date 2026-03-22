@@ -1,9 +1,10 @@
 /**
- * Nuggets holographic memory integration.
- * Provides cross-session learning via HRR-based memory.
+ * Nuggets holographic memory — self-contained implementation.
+ * Provides cross-session learning via a simple JSON file store.
+ * Replaces the external 'nuggets' package dependency.
  */
 
-import { NuggetShelf } from "nuggets";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { log } from "./logger.js";
@@ -11,8 +12,104 @@ import { log } from "./logger.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAVE_DIR = path.join(__dirname, "data", "nuggets");
 
-// Unique session ID per process — needed for nuggets hit tracking
-const SESSION_ID = `session_${Date.now()}`;
+// ─── Built-in NuggetShelf ────────────────────────────────────────────────────
+
+class Nugget {
+  constructor(name) {
+    this.name = name;
+    this._data = {}; // key → { value, hits }
+  }
+
+  remember(key, value) {
+    this._data[key] = { value, hits: this._data[key]?.hits ?? 0 };
+  }
+
+  recall(key) {
+    if (this._data[key]) {
+      this._data[key].hits++;
+      return { found: true, key, answer: this._data[key].value, confidence: 1.0 };
+    }
+    // Partial match fallback
+    const lower = key.toLowerCase();
+    for (const [k, v] of Object.entries(this._data)) {
+      if (k.toLowerCase().includes(lower) || lower.includes(k.toLowerCase())) {
+        v.hits++;
+        return { found: true, key: k, answer: v.value, confidence: 0.7 };
+      }
+    }
+    return { found: false };
+  }
+
+  facts() {
+    return Object.entries(this._data).map(([k, v]) => ({ key: k, value: v.value, hits: v.hits }));
+  }
+
+  toJSON() { return this._data; }
+
+  fromJSON(data) { this._data = data ?? {}; }
+}
+
+class NuggetShelf {
+  constructor({ saveDir, autoSave = false }) {
+    this.saveDir = saveDir;
+    this.autoSave = autoSave;
+    this._nuggets = {};
+    fs.mkdirSync(saveDir, { recursive: true });
+  }
+
+  get size() { return Object.keys(this._nuggets).length; }
+
+  loadAll() {
+    try {
+      const files = fs.readdirSync(this.saveDir).filter(f => f.endsWith(".json"));
+      for (const file of files) {
+        const name = file.replace(".json", "");
+        const nugget = new Nugget(name);
+        const raw = JSON.parse(fs.readFileSync(path.join(this.saveDir, file), "utf8"));
+        nugget.fromJSON(raw);
+        this._nuggets[name] = nugget;
+      }
+    } catch { /* ok if dir is empty */ }
+  }
+
+  _save(name) {
+    if (!this.autoSave) return;
+    try {
+      fs.writeFileSync(
+        path.join(this.saveDir, `${name}.json`),
+        JSON.stringify(this._nuggets[name].toJSON(), null, 2)
+      );
+    } catch { /* best-effort */ }
+  }
+
+  getOrCreate(name) {
+    if (!this._nuggets[name]) this._nuggets[name] = new Nugget(name);
+    return this._nuggets[name];
+  }
+
+  get(name) { return this._nuggets[name]; }
+
+  list() { return Object.keys(this._nuggets).map(name => ({ name })); }
+
+  remember(nuggetName, key, value) {
+    this.getOrCreate(nuggetName).remember(key, value);
+    this._save(nuggetName);
+  }
+
+  recall(key, nuggetName) {
+    if (nuggetName && this._nuggets[nuggetName]) {
+      return this._nuggets[nuggetName].recall(key);
+    }
+    // Search all nuggets
+    for (const nugget of Object.values(this._nuggets)) {
+      const r = nugget.recall(key);
+      if (r.found) return r;
+    }
+    return { found: false };
+  }
+}
+
+// ─── Singleton ───────────────────────────────────────────────────────────────
 
 let shelf = null;
 
@@ -24,26 +121,22 @@ export function initMemory() {
   shelf.loadAll();
 
   // Ensure core nuggets exist
-  shelf.getOrCreate("pools");       // pool outcomes and patterns
-  shelf.getOrCreate("strategies");  // strategy effectiveness
-  shelf.getOrCreate("lessons");     // general learned lessons
-  shelf.getOrCreate("patterns");    // market patterns
+  shelf.getOrCreate("pools");
+  shelf.getOrCreate("strategies");
+  shelf.getOrCreate("lessons");
+  shelf.getOrCreate("patterns");
 
   log("memory", `Nuggets memory initialized (${shelf.size} nuggets loaded from ${SAVE_DIR})`);
   return shelf;
 }
 
-/**
- * Get the shelf instance (initializes if needed).
- */
 export function getShelf() {
   if (!shelf) initMemory();
   return shelf;
 }
 
-/**
- * Remember a pool outcome.
- */
+// ─── Public API ──────────────────────────────────────────────────────────────
+
 export function rememberPoolOutcome(poolName, result) {
   const s = getShelf();
   const key = poolName.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 40);
@@ -52,9 +145,6 @@ export function rememberPoolOutcome(poolName, result) {
   log("memory", `Remembered pool outcome: ${key}`);
 }
 
-/**
- * Remember a strategy outcome.
- */
 export function rememberStrategy(pattern, result) {
   const s = getShelf();
   const key = pattern.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 40);
@@ -63,122 +153,88 @@ export function rememberStrategy(pattern, result) {
   log("memory", `Remembered strategy: ${key}`);
 }
 
-/** Sanitize keys the same way as write paths — strip special chars */
 function sanitizeKey(str) {
   return str.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 40);
 }
 
-/**
- * Recall relevant memories for pool screening context.
- */
 export function recallForScreening(poolData) {
   const s = getShelf();
   const results = [];
 
-  // Check if we have memory about this pool or token
   const rawName = poolData?.name || poolData?.pair;
   if (rawName) {
-    const name = sanitizeKey(rawName);
-    const r = s.recall(name, "pools", SESSION_ID);
+    const r = s.recall(sanitizeKey(rawName), "pools");
     if (r.found) results.push({ source: "pools", ...r });
   }
 
   if (poolData?.base_token) {
-    const r = s.recall(sanitizeKey(poolData.base_token), "pools", SESSION_ID);
-    if (r.found && !results.some(x => x.key === r.key)) {
-      results.push({ source: "pools", ...r });
-    }
+    const r = s.recall(sanitizeKey(poolData.base_token), "pools");
+    if (r.found && !results.some(x => x.key === r.key)) results.push({ source: "pools", ...r });
   }
 
-  // Check strategy patterns by bin_step
   if (poolData?.bin_step) {
-    const r = s.recall(`bid_ask_bs${poolData.bin_step}`, "strategies", SESSION_ID);
+    const r = s.recall(`bid_ask_bs${poolData.bin_step}`, "strategies");
     if (r.found) results.push({ source: "strategies", ...r });
   }
 
   return results;
 }
 
-/**
- * Recall relevant memories for position management.
- */
 export function recallForManagement(position) {
   const s = getShelf();
   const results = [];
 
-  // Position objects have `pair` (e.g. "Gany-SOL"), not `pool_name`
   const rawKey = position?.pair || position?.pool_name;
   if (rawKey) {
-    const poolKey = sanitizeKey(rawKey);
-    const r = s.recall(poolKey, "pools", SESSION_ID);
+    const r = s.recall(sanitizeKey(rawKey), "pools");
     if (r.found) results.push({ source: "pools", ...r });
   }
 
-  // Check for learned lessons about management
-  const r = s.recall("management", "lessons", SESSION_ID);
+  const r = s.recall("management", "lessons");
   if (r.found) results.push({ source: "lessons", ...r });
 
   return results;
 }
 
-/**
- * Get all high-confidence memories formatted for prompt injection.
- */
 export function getMemoryContext() {
   const s = getShelf();
   const lines = [];
 
-  for (const nuggetInfo of s.list()) {
+  for (const { name } of s.list()) {
     try {
-      const nugget = s.get(nuggetInfo.name);
-      const facts = nugget.facts();
-      // Include facts that have been recalled at least once (validated relevance)
-      const relevant = facts.filter(f => f.hits >= 1);
+      const nugget = s.get(name);
+      const relevant = nugget.facts().filter(f => f.hits >= 1);
       if (relevant.length === 0) continue;
-
-      lines.push(`[${nuggetInfo.name}]`);
-      for (const f of relevant.slice(0, 10)) { // cap at 10 per nugget
+      lines.push(`[${name}]`);
+      for (const f of relevant.slice(0, 10)) {
         lines.push(`  ${f.key}: ${f.value}`);
       }
-    } catch {
-      continue;
-    }
+    } catch { continue; }
   }
 
   return lines.length > 0 ? lines.join("\n") : null;
 }
 
-/**
- * Store mid-position observations during management cycles.
- * Builds up a picture of how pools behave over time.
- */
 export function rememberPositionSnapshot(position) {
   const s = getShelf();
   const pair = position.pair || position.pool_name || "unknown";
   const key = pair.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 40);
 
-  // Pool behavior snapshot
   const inRange = position.in_range ? "in-range" : "OOR";
   const pnl = position.pnl_pct != null ? `${position.pnl_pct.toFixed(1)}%` : "?";
   const fees = position.unclaimed_fees_usd != null ? `$${position.unclaimed_fees_usd}` : "?";
   const age = position.age_minutes != null ? `${position.age_minutes}m` : "?";
 
-  const snapshot = `${inRange}, PnL ${pnl}, fees ${fees}, age ${age}`;
-  s.remember("pools", key, snapshot);
+  s.remember("pools", key, `${inRange}, PnL ${pnl}, fees ${fees}, age ${age}`);
 
-  // Track pool patterns (volume/fee trends)
   if (position.fee_tvl_ratio != null) {
-    const patternKey = `${key}_feeTvl`;
     s.getOrCreate("patterns");
-    s.remember("patterns", patternKey, `fee/TVL=${position.fee_tvl_ratio} at ${new Date().toISOString().slice(11, 16)}`);
+    s.remember("patterns", `${key}_feeTvl`, `fee/TVL=${position.fee_tvl_ratio} at ${new Date().toISOString().slice(11, 16)}`);
   }
 
-  log("memory", `Snapshot stored: ${key} → ${snapshot}`);
+  log("memory", `Snapshot stored: ${key}`);
 }
 
-/**
- * Let the LLM explicitly remember something.
- */
 export function rememberFact(nuggetName, key, value) {
   const s = getShelf();
   s.getOrCreate(nuggetName);
@@ -187,12 +243,9 @@ export function rememberFact(nuggetName, key, value) {
   return { saved: true, nugget: nuggetName, key };
 }
 
-/**
- * Let the LLM query memory.
- */
 export function recallMemory(query, nuggetName) {
   const s = getShelf();
-  const result = s.recall(query, nuggetName || undefined, SESSION_ID);
+  const result = s.recall(query, nuggetName || undefined);
   log("memory", `LLM recall "${query}" → ${result.found ? result.answer : "not found"}`);
   return result;
 }
