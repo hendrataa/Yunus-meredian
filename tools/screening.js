@@ -119,6 +119,49 @@ export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
   return pool;
 }
 
+const DLMM_API_BASE = "https://dlmm-api.meteora.ag";
+
+/**
+ * Fetch OHLCV (price candles) for a specific pool.
+ * Use this to assess recent price action and trend direction before deploying.
+ */
+export async function getPoolOhlcv({ pool_address, timeframe = "1H", limit = 24 } = {}) {
+  const url = `${DLMM_API_BASE}/pair/${pool_address}/analytic/ohlcv?type=${timeframe}&count=${limit}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`OHLCV API error: ${res.status} ${res.statusText}`);
+  }
+  const data = await res.json();
+  const candles = (data || []).map(c => ({
+    t: c.time || c.timestamp,
+    o: round(c.open),
+    h: round(c.high),
+    l: round(c.low),
+    c: round(c.close),
+    v: round(c.volume),
+  }));
+
+  if (!candles.length) return { pool: pool_address, candles: [] };
+
+  const first = candles[0].o;
+  const last  = candles[candles.length - 1].c;
+  const change_pct = first > 0 ? round(((last - first) / first) * 100) : null;
+
+  return {
+    pool: pool_address,
+    timeframe,
+    candles,
+    summary: {
+      open: first,
+      close: last,
+      high: Math.max(...candles.map(c => c.h)),
+      low:  Math.min(...candles.map(c => c.l)),
+      change_pct,
+      trend: change_pct == null ? "unknown" : change_pct > 5 ? "strong_up" : change_pct < -5 ? "strong_down" : "ranging",
+    },
+  };
+}
+
 /**
  * Condense a pool object for LLM consumption.
  * Raw API returns ~100+ fields per pool. The LLM only needs ~20.

@@ -93,6 +93,40 @@ IMPORTANT: Only call this with a real pool address from get_my_positions or get_
     }
   },
 
+  {
+    type: "function",
+    function: {
+      name: "get_pool_ohlcv",
+      description: `Fetch OHLCV price candles for a DLMM pool from the Meteora API.
+Use this before deploying to assess recent price action and trend direction.
+Returns candles (open/high/low/close/volume) plus a summary with trend classification:
+- strong_up: price up >5% over the window (high IL risk if deploying now)
+- strong_down: price down >5% (may be opportunity or falling knife)
+- ranging: price relatively flat (lower IL risk, good for LP entry)
+
+Call this alongside get_pool_detail when evaluating a pool for deployment.`,
+      parameters: {
+        type: "object",
+        properties: {
+          pool_address: {
+            type: "string",
+            description: "The on-chain pool address (base58 public key)"
+          },
+          timeframe: {
+            type: "string",
+            enum: ["1m", "5m", "15m", "1H", "4H", "1D"],
+            description: "Candle timeframe. Default 1H. Use 5m for quick momentum check."
+          },
+          limit: {
+            type: "number",
+            description: "Number of candles to return. Default 24 (24h of hourly candles)."
+          }
+        },
+        required: ["pool_address"]
+      }
+    }
+  },
+
   // ═══════════════════════════════════════════
   //  POSITION DEPLOYMENT TOOLS
   // ═══════════════════════════════════════════

@@ -93,6 +93,28 @@ Your goal: Find high-yield, high-volume pools and DEPLOY capital.
    - HARD RULE: SOL-sided SPOT only — never Bid/Ask, never dual-sided.
    - COMPOUNDING: Deploy amount is computed from wallet size — larger wallet = larger position. Use the amount provided in the cycle goal, do NOT default to a smaller fixed number.
    - Focus on one high-conviction deployment per cycle. Patient waiting beats forced entry.
+
+═══════════════════════════════════════════
+ DLMM LP EXPERT KNOWLEDGE
+═══════════════════════════════════════════
+
+BIN STEP SELECTION — match bin step to the pair's volatility profile:
+
+  Scenario              │ Bin Step   │ Shape       │ Range
+  ──────────────────────┼────────────┼─────────────┼────────────
+  Stablecoin pairs      │ 1–5 bps    │ Spot        │ Tight
+  Blue chips (SOL/USDC) │ 10–25 bps  │ Spot/Curve  │ Moderate
+  Volatile mid-caps     │ 25–80 bps  │ Spot/Bid-Ask│ Wide
+  Launches/Memecoins    │ 80–200 bps │ Spot/Bid-Ask│ Very wide
+
+LIQUIDITY SHAPES:
+- Spot (uniform): Equal liquidity across all bins. Most forgiving — use when uncertain.
+- Curve (concentrated): Bell curve near current price. Max efficiency but amplifies IL if price trends away. High conviction only.
+- Bid-Ask (inverse): Concentrated at range edges. Use for volatility capture or single-sided DCA.
+
+DYNAMIC FEES: Base fee (set by pool, tied to bin step) + variable surge component during high-volatility. Surge fees compensate LPs for IL risk.
+
+PRICE ACTION: Use get_pool_ohlcv to check recent price action before deploying. A pool with high volume but trending hard in one direction has high IL risk.
 `;
   } else if (agentType === "MANAGER") {
     basePrompt += `
@@ -143,6 +165,37 @@ OVERRIDE RULE: When the user explicitly specifies deploy parameters (strategy, b
 SWAP AFTER CLOSE: After any close_position, immediately swap base tokens back to SOL — unless the user explicitly said to hold or keep the token. Skip tokens worth < $0.10 (dust). Always check token USD value before swapping.
 
 PARALLEL FETCH RULE: When deploying to a specific pool, call get_pool_detail, check_smart_wallets_on_pool, get_token_holders, and get_token_narrative in a single parallel batch — all four in one step. Do NOT call them sequentially. Then decide and deploy.
+
+═══════════════════════════════════════════
+ DLMM LP EXPERT KNOWLEDGE
+═══════════════════════════════════════════
+
+You are an expert advisor on Meteora DLMM liquidity provision. Apply this knowledge when users ask about bin steps, shapes, IL, rebalancing, or pool selection.
+
+BIN STEP SELECTION:
+  Scenario              │ Bin Step   │ Shape       │ Range
+  ──────────────────────┼────────────┼─────────────┼────────────
+  Stablecoin pairs      │ 1–5 bps    │ Spot        │ Tight
+  Blue chips (SOL/USDC) │ 10–25 bps  │ Spot/Curve  │ Moderate
+  Volatile mid-caps     │ 25–80 bps  │ Spot/Bid-Ask│ Wide
+  Launches/Memecoins    │ 80–200 bps │ Spot/Bid-Ask│ Very wide
+
+LIQUIDITY SHAPES:
+- Spot (uniform): Equal distribution — use as default, most forgiving for uncertain markets.
+- Curve (concentrated): Bell curve near current price — high efficiency, amplifies IL, high conviction only.
+- Bid-Ask (inverse): Concentrated at range edges — volatility capture, single-sided DCA strategies.
+
+IMPERMANENT LOSS: In DLMM, IL is step-function (compounds per bin crossed), not smooth. Concentrated positions amplify IL per dollar but also generate proportionally higher fees.
+
+REBALANCING: If active bin is interior/centered → hold. If at edge or outside range → consider reposition. Factor in whether price will return before locking in IL.
+
+USE get_pool_ohlcv to check recent price action when evaluating a pool. Quote specifics: "Pool X shows $2.4M 24h volume and 0.8% fee/TVL — better than Pool Y's $400K."
+
+RISK DISCLOSURES (include when advising):
+- Concentrated liquidity amplifies IL vs traditional AMMs
+- Launch pools carry extreme IL/volatility risk — use 100+ bps, wider range
+- Past fee APR does not predict future performance
+- Volume can drop unexpectedly, reducing fee generation
 `;
   }
 

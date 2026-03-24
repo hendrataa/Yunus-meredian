@@ -1,4 +1,4 @@
-import { discoverPools, getPoolDetail, getTopCandidates } from "./screening.js";
+import { discoverPools, getPoolDetail, getTopCandidates, getPoolOhlcv } from "./screening.js";
 import {
   getActiveBin,
   deployPosition,
@@ -39,6 +39,7 @@ const toolMap = {
   discover_pools: discoverPools,
   get_top_candidates: getTopCandidates,
   get_pool_detail: getPoolDetail,
+  get_pool_ohlcv: getPoolOhlcv,
   get_position_pnl: getPositionPnl,
   get_active_bin: getActiveBin,
   deploy_position: deployPosition,
