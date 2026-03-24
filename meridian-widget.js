@@ -120,8 +120,6 @@ async function buildWidget(data) {
 
   addStatBox(stats, "POSITIONS", String(ov.open_positions ?? "—"), C.white);
   stats.addSpacer(4);
-  addStatBox(stats, "NET PnL", fmtUsd(ov.net_pnl_usd), pnlColor(ov.net_pnl_usd));
-  stats.addSpacer(4);
   addStatBox(stats, "FEES", `$${ov.total_fees_claimed ?? "0"}`, C.accent);
   stats.addSpacer(4);
   addStatBox(stats, "WIN RATE", ov.win_rate !== "—" ? `${ov.win_rate}%` : "—", C.white);
@@ -143,38 +141,77 @@ async function buildWidget(data) {
   } else {
     const visible = pos.slice(0, 4);
     for (const p of visible) {
-      const row = w.addStack();
+      const card = w.addStack();
+      card.layoutVertically();
+      card.backgroundColor = C.bgCard;
+      card.cornerRadius    = 7;
+      card.setPadding(6, 10, 6, 10);
+
+      // ── Top row: name | fees | age | status ──
+      const row = card.addStack();
       row.layoutHorizontally();
       row.centerAlignContent();
-      row.backgroundColor = C.bgCard;
-      row.cornerRadius    = 7;
-      row.setPadding(6, 10, 6, 10);
-      row.spacing         = 4;
+      row.spacing = 4;
 
-      // Pool name
       const name = row.addText(p.pool_name || "Unknown");
-      name.textColor   = C.white;
-      name.font        = F.bold(11);
-      name.lineLimit   = 1;
+      name.textColor = C.white;
+      name.font      = F.bold(11);
+      name.lineLimit = 1;
 
       row.addSpacer();
 
-      // Fees earned
       const fees = row.addText(`$${(p.total_fees_claimed_usd || 0).toFixed(2)}`);
       fees.textColor = C.accent;
-      fees.font      = F.mono(11);
+      fees.font      = F.mono(10);
 
-      // Age
       const age = row.addText(fmtAge(p.age_minutes ?? 0));
       age.textColor = C.dimWhite;
       age.font      = F.regular(10);
 
-      // Status badge
-      const inRange  = !p.out_of_range_since;
-      const statusTxt = inRange ? "IN" : "OOR";
-      const status   = row.addText(statusTxt);
+      const inRange   = !p.out_of_range_since;
+      const statusTxt = inRange ? "● IN" : "● OOR";
+      const status    = row.addText(statusTxt);
       status.textColor = inRange ? C.accent : C.red;
       status.font      = F.bold(10);
+
+      // ── Range bar ──────────────────────────────────────
+      card.addSpacer(4);
+      const barRow = card.addStack();
+      barRow.layoutHorizontally();
+      barRow.spacing = 3;
+
+      // Compute cursor position (0–1)
+      const binMin = p.bin_range?.min_bin_id ?? p.bin_range?.lower  ?? null;
+      const binMax = p.bin_range?.max_bin_id ?? p.bin_range?.upper  ?? null;
+      const active = p.active_bin_at_deploy  ?? null;
+
+      let pct = 0.5;
+      if (binMin !== null && binMax !== null && active !== null && binMax !== binMin) {
+        pct = Math.min(1, Math.max(0, (active - binMin) / (binMax - binMin)));
+      }
+
+      // Draw bar as two segments: left (filled) + right (empty)
+      // Total 20 character-wide blocks scaled by pct
+      const TOTAL   = 18;
+      const filled  = Math.round(pct * TOTAL);
+      const empty   = TOTAL - filled;
+      const barColor = inRange ? C.accent : C.red;
+
+      const leftBar = barRow.addText("▮".repeat(Math.max(1, filled)));
+      leftBar.textColor = barColor;
+      leftBar.font      = Font.boldSystemFont(7);
+
+      const rightBar = barRow.addText("▯".repeat(Math.max(1, empty)));
+      rightBar.textColor = C.muted;
+      rightBar.font      = Font.boldSystemFont(7);
+
+      // Bin labels
+      barRow.addSpacer();
+      const binLabel = barRow.addText(
+        binMin !== null ? `${binMin}–${binMax}` : "no range"
+      );
+      binLabel.textColor = C.muted;
+      binLabel.font      = F.regular(8);
 
       w.addSpacer(4);
     }
