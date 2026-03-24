@@ -162,6 +162,18 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
         continue;
       }
 
+      // Premature close / network drop — retry up to 3 times with backoff
+      const isPrematureClose = error.message?.toLowerCase().includes("premature close")
+        || error.message?.toLowerCase().includes("network")
+        || error.code === "ECONNRESET"
+        || error.code === "ECONNABORTED";
+      if (isPrematureClose && step < maxSteps - 1) {
+        const wait = 10000;
+        log("agent", `Premature close from provider, retrying in ${wait / 1000}s...`);
+        await sleep(wait);
+        continue;
+      }
+
       // For other errors, break the loop
       throw error;
     }
