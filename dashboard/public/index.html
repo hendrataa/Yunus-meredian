@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meridian · LP Agent</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ── Header ── -->
+  <header>
+    <div class="brand">
+      <span class="brand-name">MERIDIAN</span>
+      <span class="brand-sub">LP AGENT</span>
+    </div>
+    <nav>
+      <button class="nav-btn active" data-page="overview">Overview</button>
+      <button class="nav-btn" data-page="history">History</button>
+      <button class="nav-btn" data-page="lessons">Lessons</button>
+      <button class="nav-btn" data-page="logs">Events</button>
+    </nav>
+    <div class="header-right">
+      <span id="status-dot" class="dot dot-offline"></span>
+      <span id="status-label">Connecting…</span>
+      <span id="updated-at" class="muted"></span>
+    </div>
+  </header>
+
+  <!-- ── Stats bar ── -->
+  <div class="statsbar">
+    <div class="stat">
+      <span class="stat-label">POSITIONS</span>
+      <span class="stat-value" id="s-positions">—</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">NET PNL</span>
+      <span class="stat-value" id="s-pnl">—</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">FEES CLAIMED</span>
+      <span class="stat-value" id="s-fees">—</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">WIN RATE</span>
+      <span class="stat-value" id="s-winrate">—</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">PROFIT FACTOR</span>
+      <span class="stat-value" id="s-profitfactor">—</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">CLOSED</span>
+      <span class="stat-value" id="s-closed">—</span>
+    </div>
+  </div>
+
+  <!-- ── Pages ── -->
+  <main>
+
+    <!-- Overview -->
+    <section id="page-overview" class="page active">
+      <div class="section-title">ACTIVE POSITIONS</div>
+      <div id="positions-grid" class="positions-grid">
+        <div class="empty-state">No open positions</div>
+      </div>
+
+      <div class="section-title" style="margin-top:2rem">CUMULATIVE PNL</div>
+      <div class="chart-wrap">
+        <canvas id="pnl-chart"></canvas>
+        <div id="chart-empty" class="chart-empty muted">Not enough data yet</div>
+      </div>
+    </section>
+
+    <!-- History -->
+    <section id="page-history" class="page">
+      <div class="section-title">CLOSED POSITIONS</div>
+      <div class="table-wrap">
+        <table id="history-table">
+          <thead>
+            <tr>
+              <th>Pool</th>
+              <th>Strategy</th>
+              <th>PnL %</th>
+              <th>Fees ($)</th>
+              <th>Hold</th>
+              <th>Reason</th>
+              <th>Closed</th>
+            </tr>
+          </thead>
+          <tbody id="history-body">
+            <tr><td colspan="7" class="muted center">No history yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Lessons -->
+    <section id="page-lessons" class="page">
+      <div class="section-title">DERIVED LESSONS</div>
+      <div id="lessons-grid" class="lessons-grid">
+        <div class="empty-state">No lessons yet</div>
+      </div>
+    </section>
+
+    <!-- Events -->
+    <section id="page-logs" class="page">
+      <div class="section-title">RECENT EVENTS</div>
+      <div id="events-list" class="events-list">
+        <div class="empty-state">No events yet</div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
