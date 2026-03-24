@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { buildSystemPrompt } from "./prompt.js";
 import { executeTool } from "./tools/executor.js";
 import { tools } from "./tools/definitions.js";
@@ -26,6 +27,25 @@ const client = new OpenAI({
   timeout: 5 * 60 * 1000,
 });
 
+// Anthropic client — only initialised when ANTHROPIC_API_KEY is present
+// Set model to any claude-* model (e.g. claude-sonnet-4-6) to use this path
+const anthropicClient = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: 5 * 60 * 1000 })
+  : null;
+
+function isClaudeModel(model) {
+  return typeof model === "string" && model.startsWith("claude-") && !!anthropicClient;
+}
+
+// Convert OpenAI tool definitions to Anthropic format
+function toAnthropicTools(openaiTools) {
+  return openaiTools.map(t => ({
+    name: t.function.name,
+    description: t.function.description,
+    input_schema: t.function.parameters,
+  }));
+}
+
 const DEFAULT_MODEL = process.env.LLM_MODEL || "openrouter/healer-alpha";
 
 /**
@@ -43,6 +63,13 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   const perfSummary = getPerformanceSummary();
   const systemPrompt = buildSystemPrompt(agentType, portfolio, positions, stateSummary, lessons, perfSummary);
 
+  const activeModel = model || DEFAULT_MODEL;
+
+  // Route to Anthropic when a claude-* model is requested and key is set
+  if (isClaudeModel(activeModel)) {
+    return runAnthropicLoop(goal, maxSteps, sessionHistory, agentType, activeModel, maxOutputTokens, systemPrompt);
+  }
+
   const messages = [
     { role: "system", content: systemPrompt },
     ...sessionHistory,          // inject prior conversation turns
@@ -54,8 +81,6 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
     log("agent", `Step ${step + 1}/${maxSteps}`);
 
     try {
-      const activeModel = model || DEFAULT_MODEL;
-
       // Retry up to 3 times on transient provider errors (502, 503, 529)
       const FALLBACK_MODEL = "stepfun/step-3.5-flash:free";
       let response;
@@ -138,6 +163,76 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
       }
 
       // For other errors, break the loop
+      throw error;
+    }
+  }
+
+  log("agent", "Max steps reached without final answer");
+  return { content: "Max steps reached. Review logs for partial progress.", userMessage: goal };
+}
+
+async function runAnthropicLoop(goal, maxSteps, sessionHistory, agentType, model, maxOutputTokens, systemPrompt) {
+  const anthropicTools = toAnthropicTools(getToolsForRole(agentType));
+
+  // sessionHistory is plain {role, content} pairs — compatible with Anthropic's format
+  const messages = [
+    ...sessionHistory,
+    { role: "user", content: goal },
+  ];
+
+  for (let step = 0; step < maxSteps; step++) {
+    log("agent", `Step ${step + 1}/${maxSteps} [Claude]`);
+
+    try {
+      const response = await anthropicClient.messages.create({
+        model,
+        system: systemPrompt,
+        messages,
+        tools: anthropicTools,
+        tool_choice: { type: "auto" },
+        temperature: config.llm.temperature,
+        max_tokens: maxOutputTokens ?? config.llm.maxTokens,
+      });
+
+      const toolUseBlocks = response.content.filter(b => b.type === "tool_use");
+      const textContent   = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+
+      // Add assistant turn to messages
+      messages.push({ role: "assistant", content: response.content });
+
+      if (response.stop_reason === "end_turn" || toolUseBlocks.length === 0) {
+        if (!textContent) {
+          messages.pop();
+          log("agent", "Empty response, retrying...");
+          continue;
+        }
+        log("agent", "Final answer reached");
+        log("agent", textContent);
+        return { content: textContent, userMessage: goal };
+      }
+
+      // Execute tool calls in parallel and send results back
+      const toolResults = await Promise.all(toolUseBlocks.map(async (block) => {
+        log("agent", `Tool call: ${block.name}`);
+        try {
+          const result = await executeTool(block.name, block.input);
+          return { type: "tool_result", tool_use_id: block.id, content: JSON.stringify(result) };
+        } catch (e) {
+          return { type: "tool_result", tool_use_id: block.id, content: `Error: ${e.message}`, is_error: true };
+        }
+      }));
+
+      messages.push({ role: "user", content: toolResults });
+
+    } catch (error) {
+      log("error", `Anthropic loop error at step ${step}: ${error.message}`);
+
+      if (error.status === 429) {
+        log("agent", "Rate limited, waiting 30s...");
+        await sleep(30000);
+        continue;
+      }
+
       throw error;
     }
   }
