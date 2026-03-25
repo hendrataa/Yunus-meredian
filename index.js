@@ -106,8 +106,11 @@ export function startCronJobs() {
     let mgmtReport = null;
     let positions = [];
     try {
-      // Pre-load all positions + PnL in parallel — LLM gets everything, no fetch steps needed
-      const livePositions = await getMyPositions().catch(() => null);
+      // Pre-load positions + wallet in parallel — passed to agentLoop to avoid redundant fetches
+      const [livePositions, mgmtPortfolio] = await Promise.all([
+        getMyPositions().catch(() => null),
+        getWalletBalances().catch(() => null),
+      ]);
       positions = livePositions?.positions || [];
 
       if (positions.length === 0) {
@@ -211,7 +214,7 @@ If all positions STAY and no fees to claim, just write the report with no tool c
 REPORT FORMAT (one per position):
 **[PAIR]** | Age: [X]m | Unclaimed: $[X] | Claimed: $[X] | PnL: [X]%
 **Rule:** [number or "none"] | **Decision:** STAY/CLOSE | **Reason:** [1 sentence]
-      `, config.llm.maxSteps, [], "MANAGER", config.llm.managementModel, 4096);
+      `, config.llm.maxSteps, [], "MANAGER", config.llm.managementModel, 4096, { portfolio: mgmtPortfolio, positions: livePositions });
       mgmtReport = content;
     } catch (error) {
       log("cron_error", `Management cycle failed: ${error.message}`);
@@ -270,39 +273,36 @@ REPORT FORMAT (one per position):
       const topCandidates = await getTopCandidates({ limit: 5 }).catch(() => null);
       const candidates = topCandidates?.candidates || topCandidates?.pools || [];
 
-      const candidateBlocks = [];
-      for (const pool of candidates.slice(0, 5)) {
+      // Load all 5 candidates in parallel (was sequential — now ~5x faster)
+      const candidateBlocks = await Promise.all(candidates.slice(0, 5).map(async (pool) => {
         const mint = pool.base?.mint;
         const [smartWallets, holders, narrative, tokenInfo, poolMemory] = await Promise.allSettled([
-            checkSmartWalletsOnPool({ pool_address: pool.pool }),
-            mint ? getTokenHolders({ mint, limit: 100 }) : Promise.resolve(null),
-            mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
-            mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
-            Promise.resolve(recallForPool(pool.pool)),
-          ]);
+          checkSmartWalletsOnPool({ pool_address: pool.pool }),
+          mint ? getTokenHolders({ mint, limit: 100 }) : Promise.resolve(null),
+          mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
+          mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
+          Promise.resolve(recallForPool(pool.pool)),
+        ]);
 
-          const sw   = smartWallets.status === "fulfilled" ? smartWallets.value : null;
-          const h    = holders.status === "fulfilled" ? holders.value : null;
-          const n    = narrative.status === "fulfilled" ? narrative.value : null;
-          const ti   = tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null;
-          const mem  = poolMemory.value;
+        const sw  = smartWallets.status === "fulfilled" ? smartWallets.value : null;
+        const h   = holders.status === "fulfilled" ? holders.value : null;
+        const n   = narrative.status === "fulfilled" ? narrative.value : null;
+        const ti  = tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null;
+        const mem = poolMemory.value;
 
-          const priceChange = ti?.stats_1h?.price_change;
-          const netBuyers = ti?.stats_1h?.net_buyers;
+        const priceChange = ti?.stats_1h?.price_change;
+        const netBuyers   = ti?.stats_1h?.net_buyers;
 
-          // Build compact block
-          const lines = [
-            `POOL: ${pool.name} (${pool.pool})`,
-            `  metrics: bin_step=${pool.bin_step}, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.active_tvl}, vol=${pool.volatility}, organic=${pool.organic_score}, mcap=$${pool.mcap}`,
-            sw?.in_pool?.length ? `  smart_wallets: ${sw.in_pool.map(w => w.name).join(", ")} ✓` : null,
-            h ? `  holders: top10=${h.top_10_real_holders_pct ?? "?"}%, bundlers=${h.bundlers_pct_in_top_100 ?? "?"}%, fees=${h.global_fees_sol ?? "?"}SOL` : null,
-            priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
-            n?.narrative ? `  narrative: ${n.narrative.slice(0, 200)}` : null,
-            mem ? `  memory: ${mem.slice(0, 150)}` : null,
-          ].filter(Boolean);
-
-          candidateBlocks.push(lines.join("\n"));
-      }
+        return [
+          `POOL: ${pool.name} (${pool.pool})`,
+          `  metrics: bin_step=${pool.bin_step}, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.active_tvl}, vol=${pool.volatility}, organic=${pool.organic_score}, mcap=$${pool.mcap}`,
+          sw?.in_pool?.length ? `  smart_wallets: ${sw.in_pool.map(w => w.name).join(", ")} ✓` : null,
+          h ? `  holders: top10=${h.top_10_real_holders_pct ?? "?"}%, bundlers=${h.bundlers_pct_in_top_100 ?? "?"}%, fees=${h.global_fees_sol ?? "?"}SOL` : null,
+          priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
+          n?.narrative ? `  narrative: ${n.narrative.slice(0, 200)}` : null,
+          mem ? `  memory: ${mem.slice(0, 150)}` : null,
+        ].filter(Boolean).join("\n");
+      }));
 
       let candidateContext = candidateBlocks.length > 0
         ? `\nPRE-LOADED CANDIDATE ANALYSIS (smart wallets, holders, narrative already fetched):\n${candidateBlocks.join("\n\n")}\n`
@@ -336,7 +336,7 @@ STEPS:
 1. Pick the best candidate. If none pass, report why and stop.
 2. Call deploy_position with ${deployAmount} SOL. Set bins_below = round(35 + (volatility/5)*34) clamped to [35,69].
 3. Report result.
-      `, config.llm.maxSteps, [], "SCREENER", config.llm.screeningModel, 2048);
+      `, config.llm.maxSteps, [], "SCREENER", config.llm.screeningModel, 2048, { portfolio: preBalance, positions: prePositions });
       screenReport = content;
     } catch (error) {
       log("cron_error", `Screening cycle failed: ${error.message}`);
@@ -522,12 +522,9 @@ if (isTTY) {
   maybeRunMissedBriefing().catch(() => {});
 
   // Telegram bot
-  startPolling(async (text) => {
-    if (_managementBusy || _screeningBusy || busy) {
-      sendMessage("Agent is busy right now — try again in a moment.").catch(() => {});
-      return;
-    }
+  let _telegramQueue = null; // holds the latest queued message (only one kept)
 
+  async function processTelegramMessage(text) {
     if (text === "/briefing") {
       try {
         const briefing = await generateBriefing();
@@ -553,7 +550,24 @@ if (isTTY) {
       busy = false;
       rl.setPrompt(buildPrompt());
       rl.prompt(true);
+      // Drain queue — process any message that arrived while we were busy
+      if (_telegramQueue) {
+        const queued = _telegramQueue;
+        _telegramQueue = null;
+        processTelegramMessage(queued).catch(() => {});
+      }
     }
+  }
+
+  startPolling(async (text) => {
+    // If a manual REPL interaction is in progress, queue the message
+    if (busy) {
+      _telegramQueue = text;
+      sendMessage("⏳ I'm finishing something — I'll reply in a moment.").catch(() => {});
+      return;
+    }
+    // Automated cycles: process immediately in parallel (safety guards in executor prevent conflicts)
+    processTelegramMessage(text).catch(() => {});
   });
 
   console.log(`
