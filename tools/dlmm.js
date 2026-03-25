@@ -20,18 +20,22 @@ import {
 } from "../state.js";
 import { recordPerformance } from "../lessons.js";
 import { normalizeMint } from "./wallet.js";
+import { createRequire } from "module";
+
+const _require = createRequire(import.meta.url);
 
 // ─── Lazy SDK loader ───────────────────────────────────────────
-// @meteora-ag/dlmm → @coral-xyz/anchor uses CJS directory imports
-// that break in ESM on Node 24. Dynamic import defers loading until
-// an actual on-chain call is needed (never triggered in dry-run).
+// Load DLMM via CJS require to avoid ESM BN import conflicts.
+// The ESM (index.mjs) build re-imports BN from @coral-xyz/anchor which
+// conflicts with our own bn.js import in certain Node.js ESM contexts.
+// The CJS build uses _anchor.BN inline — no naming conflict possible.
 let _DLMM = null;
 let _StrategyType = null;
 
 async function getDLMM() {
   if (!_DLMM) {
-    const mod = await import("@meteora-ag/dlmm");
-    _DLMM = mod.default;
+    const mod = _require("@meteora-ag/dlmm");
+    _DLMM = mod.default || mod;
     _StrategyType = mod.StrategyType;
   }
   return { DLMM: _DLMM, StrategyType: _StrategyType };
