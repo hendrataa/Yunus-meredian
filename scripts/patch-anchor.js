@@ -21,7 +21,8 @@ const anchorPkgPath = path.join(root, "node_modules/@coral-xyz/anchor/package.js
 const anchorPkg = JSON.parse(fs.readFileSync(anchorPkgPath, "utf8"));
 const anchorUtils = path.join(root, "node_modules/@coral-xyz/anchor/dist/cjs/utils");
 
-if (!anchorPkg.exports) {
+const alreadyPatched = anchorPkg.exports?.["."]?.default === "./dist/cjs/index.js";
+if (!alreadyPatched) {
   const dirs = fs.readdirSync(anchorUtils, { withFileTypes: true })
     .filter(d => d.isDirectory())
     .map(d => d.name);
@@ -65,7 +66,8 @@ if (fs.existsSync(dlmmMjs)) {
   // We rewrite the imports to remove BN and then add a top-level BN import.
   
   // First, ensure BN is imported from bn.js at the top if any BN imports exist
-  if (src.includes('from "@coral-xyz/anchor"') && src.includes('BN')) {
+  // Only add if not already present to avoid duplicate imports on repeated patch runs
+  if (src.includes('from "@coral-xyz/anchor"') && src.includes('BN') && !src.startsWith('import BN from "bn.js"')) {
     src = 'import BN from "bn.js";\n' + src;
   }
 
