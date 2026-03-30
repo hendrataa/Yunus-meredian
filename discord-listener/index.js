@@ -5,9 +5,8 @@
  *
  * Env vars (from ../.env):
  *   DISCORD_USER_TOKEN    — your Discord account token (from browser DevTools)
- *   DISCORD_GUILD_ID      — LP Army server ID
- *   DISCORD_CHANNEL_IDS   — comma-separated channel IDs to monitor
- *   DISCORD_MIN_FEES_SOL  — minimum pool fees threshold (default: 5)
+ *   DISCORD_GUILD_ID       — LP Army server ID
+ *   DISCORD_CHANNEL_IDS    — comma-separated channel IDs to monitor
  */
 import { Client } from "discord.js-selfbot-v13";
 import fs from "fs";
@@ -29,7 +28,7 @@ const SIGNALS_FILE = path.join(ROOT, "discord-signals.json");
 // Solana address regex: base58, 32-44 chars
 const SOL_ADDR_RE = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
 
-// Known non-address patterns to skip (short common words that match base58 range)
+// Known non-address patterns to skip
 const FALSE_POSITIVE_SKIP = new Set([
   "solana", "meteora", "jupiter", "raydium", "orca",
 ]);
@@ -81,7 +80,7 @@ async function processAddress(address, message) {
   console.log(`  → Check with: node ../cli.js discord-signals`);
 }
 
-// ─── Main ──────────────────────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────
 
 const TOKEN = process.env.DISCORD_USER_TOKEN;
 const GUILD_ID = process.env.DISCORD_GUILD_ID;
@@ -139,7 +138,6 @@ client.on("messageCreate", async (message) => {
   console.log(`\n[message] @${message.author?.username} in #${message.channel?.name}: "${content.slice(0, 80)}"`);
   console.log(`  Addresses found: ${unique.join(", ")}`);
 
-  // Process each address independently (don't await — handle concurrently but logged sequentially)
   for (const addr of unique) {
     await processAddress(addr, message);
   }

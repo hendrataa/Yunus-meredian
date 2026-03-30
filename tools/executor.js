@@ -1,4 +1,4 @@
-import { discoverPools, getPoolDetail, getTopCandidates, getPoolOhlcv } from "./screening.js";
+import { discoverPools, getPoolDetail, getTopCandidates } from "./screening.js";
 import {
   getActiveBin,
   deployPosition,
@@ -10,12 +10,14 @@ import {
   searchPools,
 } from "./dlmm.js";
 import { getWalletBalances, swapToken } from "./wallet.js";
-import { studyTopLPers, getPoolInfo } from "./study.js";
+import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
 import { setPositionInstruction } from "../state.js";
+
 import { getPoolMemory, addPoolNote } from "../pool-memory.js";
 import { addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy } from "../strategy-library.js";
 import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-blacklist.js";
+import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
 import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../smart-wallets.js";
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
 import { config, reloadScreeningThresholds } from "../config.js";
@@ -28,7 +30,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
 import { log, logAction } from "../logger.js";
 import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
-import { rememberFact, recallMemory } from "../memory.js";
 
 // Registered by index.js so update_config can restart cron jobs when intervals change
 let _cronRestarter = null;
@@ -39,7 +40,6 @@ const toolMap = {
   discover_pools: discoverPools,
   get_top_candidates: getTopCandidates,
   get_pool_detail: getPoolDetail,
-  get_pool_ohlcv: getPoolOhlcv,
   get_position_pnl: getPositionPnl,
   get_active_bin: getActiveBin,
   deploy_position: deployPosition,
@@ -59,9 +59,6 @@ const toolMap = {
   swap_token: swapToken,
   get_top_lpers: studyTopLPers,
   study_top_lpers: studyTopLPers,
-  get_pool_info: getPoolInfo,
-  remember_fact: ({ nugget, key, value }) => rememberFact(nugget, key, value),
-  recall_memory: ({ query, nugget }) => recallMemory(query, nugget),
   set_position_note: ({ position_address, instruction }) => {
     const ok = setPositionInstruction(position_address, instruction || null);
     if (!ok) return { error: `Position ${position_address} not found in state` };
@@ -99,6 +96,9 @@ const toolMap = {
   add_to_blacklist: addToBlacklist,
   remove_from_blacklist: removeFromBlacklist,
   list_blacklist: listBlacklist,
+  block_deployer: blockDev,
+  unblock_deployer: unblockDev,
+  list_blocked_deployers: listBlockedDevs,
   add_lesson: ({ rule, tags, pinned, role }) => {
     addLesson(rule, tags || [], { pinned: !!pinned, role: role || null });
     return { saved: true, rule, pinned: !!pinned, role: role || "all" };
@@ -142,8 +142,12 @@ const toolMap = {
       timeframe: ["screening", "timeframe"],
       category: ["screening", "category"],
       minTokenFeesSol: ["screening", "minTokenFeesSol"],
-      maxBundlersPct: ["screening", "maxBundlersPct"],
+      maxBundlePct:     ["screening", "maxBundlePct"],
+      maxBotHoldersPct: ["screening", "maxBotHoldersPct"],
       maxTop10Pct: ["screening", "maxTop10Pct"],
+      minTokenAgeHours: ["screening", "minTokenAgeHours"],
+      maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
+      athFilterPct:     ["screening", "athFilterPct"],
       minFeePerTvl24h: ["management", "minFeePerTvl24h"],
       // management
       minClaimAmount: ["management", "minClaimAmount"],
@@ -151,8 +155,12 @@ const toolMap = {
       outOfRangeBinsToClose: ["management", "outOfRangeBinsToClose"],
       outOfRangeWaitMinutes: ["management", "outOfRangeWaitMinutes"],
       minVolumeToRebalance: ["management", "minVolumeToRebalance"],
-      emergencyPriceDropPct: ["management", "emergencyPriceDropPct"],
+      stopLossPct: ["management", "stopLossPct"],
       takeProfitFeePct: ["management", "takeProfitFeePct"],
+      trailingTakeProfit: ["management", "trailingTakeProfit"],
+      trailingTriggerPct: ["management", "trailingTriggerPct"],
+      trailingDropPct: ["management", "trailingDropPct"],
+      solMode: ["management", "solMode"],
       minSolToOpen: ["management", "minSolToOpen"],
       deployAmountSol: ["management", "deployAmountSol"],
       gasReserve: ["management", "gasReserve"],
@@ -245,6 +253,9 @@ const WRITE_TOOLS = new Set([
 export async function executeTool(name, args) {
   const startTime = Date.now();
 
+  // Strip model artifacts like "<|channel|>commentary" appended to tool names
+  name = name.replace(/<.*$/, "").trim();
+
   // ─── Validate tool exists ─────────────────
   const fn = toolMap[name];
   if (!fn) {
@@ -286,6 +297,11 @@ export async function executeTool(name, args) {
         notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
       } else if (name === "close_position") {
         notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0 }).catch(() => {});
+        // Note low-yield closes in pool memory so screener avoids redeploying
+        if (args.reason && args.reason.toLowerCase().includes("yield")) {
+          const poolAddr = result.pool || args.pool_address;
+          if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0,10)}` }).catch?.(() => {});
+        }
         // Auto-swap base token back to SOL unless user said to hold
         if (!args.skip_swap && result.base_mint) {
           try {
@@ -293,7 +309,11 @@ export async function executeTool(name, args) {
             const token = balances.tokens?.find(t => t.mint === result.base_mint);
             if (token && token.usd >= 0.10) {
               log("executor", `Auto-swapping ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd.toFixed(2)}) back to SOL`);
-              await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
+              const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
+              // Tell the model the swap already happened so it doesn't call swap_token again
+              result.auto_swapped = true;
+              result.auto_swap_note = `Base token already auto-swapped back to SOL (${token.symbol || result.base_mint.slice(0, 8)} → SOL). Do NOT call swap_token again.`;
+              if (swapResult?.amount_out) result.sol_received = swapResult.amount_out;
             }
           } catch (e) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
@@ -349,8 +369,8 @@ async function runSafetyChecks(name, args) {
         };
       }
 
-      // Check position count limit + duplicate pool guard
-      const positions = await getMyPositions();
+      // Check position count limit + duplicate pool guard — force fresh scan to avoid stale cache
+      const positions = await getMyPositions({ force: true });
       if (positions.total_positions >= config.risk.maxPositions) {
         return {
           pass: false,
@@ -382,14 +402,13 @@ async function runSafetyChecks(name, args) {
 
       // Check amount limits
       const amountY = args.amount_y ?? args.amount_sol ?? 0;
-      if (amountY <= 0 && (!args.amount_x || args.amount_x <= 0)) {
+      if (amountY <= 0) {
         return {
           pass: false,
-          reason: `Must provide a positive amount for either SOL (amount_y) or base token (amount_x).`,
+          reason: `Must provide a positive SOL amount (amount_y).`,
         };
       }
 
-      // Enforce minimum deploy amount — must be at least deployAmountSol (configured) or 0.1 SOL absolute floor.
       const minDeploy = Math.max(0.1, config.management.deployAmountSol);
       if (amountY < minDeploy) {
         return {
@@ -404,7 +423,7 @@ async function runSafetyChecks(name, args) {
         };
       }
 
-      // Check SOL balance — must have enough to deploy + gas reserve
+      // Check SOL balance
       const balance = await getWalletBalances();
       const gasReserve = config.management.gasReserve;
       const minRequired = amountY + gasReserve;

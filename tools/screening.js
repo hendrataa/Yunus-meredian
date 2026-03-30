@@ -1,6 +1,9 @@
 import { config } from "../config.js";
 import { isBlacklisted } from "../token-blacklist.js";
+import { isDevBlocked, getBlockedDevs } from "../dev-blocklist.js";
 import { log } from "../logger.js";
+
+const DATAPI_JUP = "https://datapi.jup.ag/v1";
 
 const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
 
@@ -30,7 +33,9 @@ export async function discoverPools({
     `fee_active_tvl_ratio>=${s.minFeeActiveTvlRatio}`,
     `base_token_organic_score>=${s.minOrganic}`,
     "quote_token_organic_score>=60",
-  ].join("&&");
+    s.minTokenAgeHours != null ? `base_token_created_at<=${Date.now() - s.minTokenAgeHours * 3_600_000}` : null,
+    s.maxTokenAgeHours != null ? `base_token_created_at>=${Date.now() - s.maxTokenAgeHours * 3_600_000}` : null,
+  ].filter(Boolean).join("&&");
 
   const url = `${POOL_DISCOVERY_BASE}/pools?` +
     `page_size=${page_size}` +
@@ -48,18 +53,53 @@ export async function discoverPools({
 
   const condensed = (data.data || []).map(condensePool);
 
-  // Filter blacklisted base tokens
-  const pools = condensed.filter((p) => {
+  // Hard-filter blacklisted tokens and blocked deployers (what pool discovery already gave us)
+  let pools = condensed.filter((p) => {
     if (isBlacklisted(p.base?.mint)) {
       log("blacklist", `Filtered blacklisted token ${p.base?.symbol} (${p.base?.mint?.slice(0, 8)}) in pool ${p.name}`);
+      return false;
+    }
+    if (p.dev && isDevBlocked(p.dev)) {
+      log("dev_blocklist", `Filtered blocked deployer ${p.dev?.slice(0, 8)} token ${p.base?.symbol} in pool ${p.name}`);
       return false;
     }
     return true;
   });
 
   const filtered = condensed.length - pools.length;
-  if (filtered > 0) {
-    log("blacklist", `Filtered ${filtered} pool(s) with blacklisted tokens`);
+  if (filtered > 0) log("blacklist", `Filtered ${filtered} pool(s) with blacklisted tokens/devs`);
+
+  // If pool discovery didn't supply dev field, batch-fetch from Jupiter for any pools
+  // where dev is null — but only if the dev blocklist is non-empty (avoid useless calls)
+  const blockedDevs = getBlockedDevs();
+  if (Object.keys(blockedDevs).length > 0) {
+    const missingDev = pools.filter((p) => !p.dev && p.base?.mint);
+    if (missingDev.length > 0) {
+      const devResults = await Promise.allSettled(
+        missingDev.map((p) =>
+          fetch(`${DATAPI_JUP}/assets/search?query=${p.base.mint}`)
+            .then((r) => r.ok ? r.json() : null)
+            .then((d) => {
+              const t = Array.isArray(d) ? d[0] : d;
+              return { pool: p.pool, dev: t?.dev || null };
+            })
+            .catch(() => ({ pool: p.pool, dev: null }))
+        )
+      );
+      const devMap = {};
+      for (const r of devResults) {
+        if (r.status === "fulfilled") devMap[r.value.pool] = r.value.dev;
+      }
+      pools = pools.filter((p) => {
+        const dev = devMap[p.pool];
+        if (dev) p.dev = dev; // enrich in-place
+        if (dev && isDevBlocked(dev)) {
+          log("dev_blocklist", `Filtered blocked deployer (jup) ${dev.slice(0, 8)} token ${p.base?.symbol}`);
+          return false;
+        }
+        return true;
+      });
+    }
   }
 
   return {
@@ -85,6 +125,82 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   const eligible = pools
     .filter((p) => !occupiedPools.has(p.pool) && !occupiedMints.has(p.base?.mint))
     .slice(0, limit);
+
+  // Enrich with OKX data — advanced info (risk/bundle/sniper) + ATH price (no API key required)
+  if (eligible.length > 0) {
+    const { getAdvancedInfo, getPriceInfo, getClusterList } = await import("./okx.js");
+    const okxResults = await Promise.allSettled(
+      eligible.map((p) => p.base?.mint
+        ? Promise.all([getAdvancedInfo(p.base.mint), getPriceInfo(p.base.mint), getClusterList(p.base.mint)])
+        : Promise.resolve([null, null, []])
+      )
+    );
+    for (let i = 0; i < eligible.length; i++) {
+      const r = okxResults[i];
+      if (r.status !== "fulfilled") continue;
+      const [adv, price, clusters] = r.value;
+      if (adv) {
+        eligible[i].risk_level      = adv.risk_level;
+        eligible[i].bundle_pct      = adv.bundle_pct;
+        eligible[i].sniper_pct      = adv.sniper_pct;
+        eligible[i].suspicious_pct  = adv.suspicious_pct;
+        eligible[i].smart_money_buy = adv.smart_money_buy;
+        eligible[i].dev_sold_all    = adv.dev_sold_all;
+        eligible[i].dex_boost       = adv.dex_boost;
+        eligible[i].dex_screener_paid = adv.dex_screener_paid;
+        if (adv.creator && !eligible[i].dev) eligible[i].dev = adv.creator;
+      }
+      if (price) {
+        eligible[i].price_vs_ath_pct = price.price_vs_ath_pct;
+        eligible[i].ath              = price.ath;
+      }
+      if (clusters?.length) {
+        // Surface KOL presence and top cluster trend for LLM
+        eligible[i].kol_in_clusters      = clusters.some((c) => c.has_kol);
+        eligible[i].top_cluster_trend    = clusters[0]?.trend ?? null;      // buy|sell|neutral
+        eligible[i].top_cluster_hold_pct = clusters[0]?.holding_pct ?? null;
+      }
+    }
+    // Bundle filter — drop pools where OKX bundle % exceeds threshold
+    const maxBundle = config.screening.maxBundlePct;
+    if (maxBundle != null) {
+      eligible.splice(0, eligible.length, ...eligible.filter((p) => {
+        if (p.bundle_pct != null && p.bundle_pct > maxBundle) {
+          log("screening", `Bundle filter: dropped ${p.name} — bundle ${p.bundle_pct}% > ${maxBundle}%`);
+          return false;
+        }
+        return true;
+      }));
+    }
+
+    // ATH filter — drop pools where price is too close to ATH
+    const athFilter = config.screening.athFilterPct;
+    if (athFilter != null) {
+      const threshold = 100 + athFilter; // e.g. -20 → threshold = 80 (price must be <= 80% of ATH)
+      const before = eligible.length;
+      eligible.splice(0, eligible.length, ...eligible.filter((p) => {
+        if (p.price_vs_ath_pct == null) return true; // no data → don't filter
+        if (p.price_vs_ath_pct > threshold) {
+          log("screening", `ATH filter: dropped ${p.name} — ${p.price_vs_ath_pct}% of ATH (limit: ${threshold}%)`);
+          return false;
+        }
+        return true;
+      }));
+      if (eligible.length < before) log("screening", `ATH filter removed ${before - eligible.length} pool(s)`);
+    }
+
+    // Drop any pools whose creator is on the dev blocklist (caught via advanced-info)
+    const before = eligible.length;
+    const filtered = eligible.filter((p) => {
+      if (p.dev && isDevBlocked(p.dev)) {
+        log("dev_blocklist", `Filtered blocked deployer (okx) ${p.dev.slice(0, 8)} token ${p.base?.symbol}`);
+        return false;
+      }
+      return true;
+    });
+    eligible.splice(0, eligible.length, ...filtered);
+    if (eligible.length < before) log("dev_blocklist", `Filtered ${before - eligible.length} pool(s) via OKX creator check`);
+  }
 
   return {
     candidates: eligible,
@@ -117,49 +233,6 @@ export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
   }
 
   return pool;
-}
-
-const DLMM_API_BASE = "https://dlmm-api.meteora.ag";
-
-/**
- * Fetch OHLCV (price candles) for a specific pool.
- * Use this to assess recent price action and trend direction before deploying.
- */
-export async function getPoolOhlcv({ pool_address, timeframe = "1H", limit = 24 } = {}) {
-  const url = `${DLMM_API_BASE}/pair/${pool_address}/analytic/ohlcv?type=${timeframe}&count=${limit}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`OHLCV API error: ${res.status} ${res.statusText}`);
-  }
-  const data = await res.json();
-  const candles = (data || []).map(c => ({
-    t: c.time || c.timestamp,
-    o: round(c.open),
-    h: round(c.high),
-    l: round(c.low),
-    c: round(c.close),
-    v: round(c.volume),
-  }));
-
-  if (!candles.length) return { pool: pool_address, candles: [] };
-
-  const first = candles[0].o;
-  const last  = candles[candles.length - 1].c;
-  const change_pct = first > 0 ? round(((last - first) / first) * 100) : null;
-
-  return {
-    pool: pool_address,
-    timeframe,
-    candles,
-    summary: {
-      open: first,
-      close: last,
-      high: Math.max(...candles.map(c => c.h)),
-      low:  Math.min(...candles.map(c => c.l)),
-      change_pct,
-      trend: change_pct == null ? "unknown" : change_pct > 5 ? "strong_up" : change_pct < -5 ? "strong_down" : "ranging",
-    },
-  };
 }
 
 /**
@@ -199,6 +272,10 @@ function condensePool(p) {
     holders: p.base_token_holders,
     mcap: round(p.token_x?.market_cap),
     organic_score: Math.round(p.token_x?.organic_score || 0),
+    token_age_hours: p.token_x?.created_at
+      ? Math.floor((Date.now() - p.token_x.created_at) / 3_600_000)
+      : null,
+    dev: p.token_x?.dev || null,
 
     // Position health
     active_positions: p.active_positions,

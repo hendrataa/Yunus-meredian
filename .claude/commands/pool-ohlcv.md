@@ -2,20 +2,16 @@
 description: Fetch price and volume history for a Meteora pool
 argument-hint: [pool_address]
 ---
-Fetch price and volume history for this pool:
+Fetch OHLCV and volume history for this pool:
 
-1. Get OHLCV candles (1h timeframe, last 24 periods):
+1. Price candles (1h, last 24 periods):
 ```
-!`curl -s "https://dlmm.datapi.meteora.ag/pools/$ARGUMENTS/ohlcv?timeframe=1h"`
+!`curl -s "https://dlmm.datapi.meteora.ag/pools/$ARGUMENTS/ohlcv?timeframe=1h&limit=24"`
 ```
 
-2. Get volume history:
+2. Volume history (1h):
 ```
 !`curl -s "https://dlmm.datapi.meteora.ag/pools/$ARGUMENTS/volume/history?timeframe=1h"`
 ```
 
-Analyse:
-- Price direction (uptrend, downtrend, consolidation)
-- Volume movement (increasing, decreasing, anomalous spikes)
-- Volume behaviour (steady vs erratic bursts)
-- Entry signal (rising volume + stable/rising price = favourable; diminishing volume = caution)
+Summarise: price direction, volume trend, and entry signal assessment.

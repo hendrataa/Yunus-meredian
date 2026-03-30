@@ -64,36 +64,6 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 - Persists to `user-config.json`
 - Restarts cron jobs if intervals changed
 
-**Valid config keys and their sections:**
-
-| Key | Section | Default |
-|-----|---------|---------|
-| minFeeActiveTvlRatio | screening | 0.05 |
-| minTvl / maxTvl | screening | 10k / 150k |
-| minVolume | screening | 500 |
-| minOrganic | screening | 60 |
-| minHolders | screening | 500 |
-| minMcap / maxMcap | screening | 150k / 10M |
-| minBinStep / maxBinStep | screening | 80 / 125 |
-| timeframe | screening | "5m" |
-| category | screening | "trending" |
-| minTokenFeesSol | screening | 30 |
-| maxBundlersPct | screening | 30 |
-| maxTop10Pct | screening | 60 |
-| blockedLaunchpads | screening | [] |
-| deployAmountSol | management | 0.5 |
-| maxDeployAmount | risk | 50 |
-| maxPositions | risk | 3 |
-| gasReserve | management | 0.2 |
-| positionSizePct | management | 0.35 |
-| minSolToOpen | management | 0.55 |
-| outOfRangeWaitMinutes | management | 30 |
-| managementIntervalMin | schedule | 10 |
-| screeningIntervalMin | schedule | 30 |
-| managementModel / screeningModel / generalModel | llm | openrouter/healer-alpha |
-
-**`computeDeployAmount(walletSol)`** — scales position size with wallet balance (compounding). Formula: `clamp(deployable × positionSizePct, floor=deployAmountSol, ceil=maxDeployAmount)`.
-
 ---
 
 ## Position Lifecycle
@@ -105,101 +75,16 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 
 ---
 
-## Screener Safety Checks (executor.js)
-
-Before `deploy_position` executes:
-- `bin_step` must be within `[minBinStep, maxBinStep]`
-- Position count must be below `maxPositions` (force-fresh scan, no cache)
-- No duplicate pool allowed (same pool_address)
-- No duplicate base token allowed (same base_mint in another pool)
-- If `amount_x > 0`: strip `amount_y` and `amount_sol` (tokenX-only deploy — no SOL needed)
-- SOL balance must cover `amount_y + gasReserve` (skipped for tokenX-only)
-- `blockedLaunchpads` enforced in `getTopCandidates()` before LLM sees candidates
-
----
-
-## bins_below Calculation (SCREENER)
-
-Linear formula based on pool volatility (set in screener prompt, `index.js`):
-
-```
-bins_below = round(35 + (volatility / 5) * 34), clamped to [35, 69]
-```
-
-- Low volatility (0) → 35 bins
-- High volatility (5+) → 69 bins
-- Any value in between is valid (continuous, not tiered)
-
----
-
 ## Telegram Commands
 
 Handled directly in `index.js` (bypass LLM):
 
 | Command | Action |
 |---------|--------|
-| `/positions` | List open positions with progress bar |
+| `/positions` | List open positions |
 | `/close <n>` | Close position by list index |
 | `/set <n> <note>` | Set note on position by list index |
-
-Progress bar format: `[████████░░░░░░░░░░░░] 40%` (no bin numbers, no arrows)
-
----
-
-## Race Condition: Double Deploy
-
-`_screeningLastTriggered` in index.js prevents concurrent screener invocations. Management cycle sets this before triggering screener. Also, `deploy_position` safety check uses `force: true` on `getMyPositions()` for a fresh count.
-
----
-
-## Bundler Detection (token.js)
-
-Two signals used in `getTokenHolders()`:
-- `common_funder` — multiple wallets funded by same source
-- `funded_same_window` — multiple wallets funded in same time window
-
-**Thresholds in config**: `maxBundlersPct` (default 30%), `maxTop10Pct` (default 60%)
-Jupiter audit API: `botHoldersPercentage` (5–25% is normal for legitimate tokens)
-
----
-
-## Base Fee Calculation (dlmm.js)
-
-Read from pool object at deploy time:
-```js
-const baseFactor = pool.lbPair.parameters?.baseFactor ?? 0;
-const actualBaseFee = baseFactor > 0
-  ? parseFloat((baseFactor * actualBinStep / 1e6 * 100).toFixed(4))
-  : null;
-```
-
----
-
-## Model Configuration
-
-- Default model: `process.env.LLM_MODEL` or `openrouter/healer-alpha`
-- Fallback on 502/503/529: `stepfun/step-3.5-flash:free` (2nd attempt), then retry
-- Per-role models: `managementModel`, `screeningModel`, `generalModel` in user-config.json
-- LM Studio: set `LLM_BASE_URL=http://localhost:1234/v1` and `LLM_API_KEY=lm-studio`
-- `maxOutputTokens` minimum: 2048 (free models may have lower limits causing empty responses)
-
----
-
-## Lessons System
-
-`lessons.js` records closed position performance and auto-derives lessons. Key points:
-- `getLessonsForPrompt({ agentType })` — injects relevant lessons into system prompt
-- `evolveThresholds()` — adjusts screening thresholds based on winners vs losers
-- Performance recorded via `recordPerformance()` called from executor.js after `close_position`
-- **Known issue**: `evolveThresholds()` references `maxVolatility` and `minFeeTvlRatio` but config.js uses `minFeeActiveTvlRatio` and has no `maxVolatility` key — the evolution of these keys is a no-op
-
----
-
-## Hive Mind (hive-mind.js)
-
-Optional feature. Enabled by setting `HIVE_MIND_URL` and `HIVE_MIND_API_KEY` in `.env`.
-Syncs lessons/deploys to a shared server, queries consensus patterns.
-Not required for normal operation.
+| `/briefing` | Send daily briefing immediately |
 
 ---
 
@@ -212,16 +97,7 @@ Not required for normal operation.
 | `OPENROUTER_API_KEY` | Yes | LLM API key |
 | `TELEGRAM_BOT_TOKEN` | No | Telegram notifications |
 | `TELEGRAM_CHAT_ID` | No | Telegram chat target |
-| `LLM_BASE_URL` | No | Override for local LLM (e.g. LM Studio) |
+| `LLM_BASE_URL` | No | Override for local LLM |
 | `LLM_MODEL` | No | Override default model |
 | `DRY_RUN` | No | Skip all on-chain transactions |
-| `HIVE_MIND_URL` | No | Collective intelligence server |
-| `HIVE_MIND_API_KEY` | No | Hive mind auth token |
 | `HELIUS_API_KEY` | No | Enhanced wallet balance data |
-
----
-
-## Known Issues / Tech Debt
-
-- `lessons.js evolveThresholds()` evolves `maxVolatility` + `minFeeTvlRatio` (wrong key names — should be `minFeeActiveTvlRatio`; `maxVolatility` doesn't exist in config at all). The evolution is a no-op for those keys.
-- `get_wallet_positions` tool (dlmm.js) is in definitions.js but not in MANAGER_TOOLS or SCREENER_TOOLS — only available in GENERAL role.

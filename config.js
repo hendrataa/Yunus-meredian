@@ -37,8 +37,13 @@ export const config = {
     timeframe:         u.timeframe         ?? "5m",
     category:          u.category          ?? "trending",
     minTokenFeesSol:   u.minTokenFeesSol   ?? 30,  // global fees paid (priority+jito tips). below = bundled/scam
-    maxBundlersPct:    u.maxBundlersPct    ?? 30,  // max bundlers % in top 100 holders
+    maxBundlePct:      u.maxBundlePct      ?? 30,  // max bundle holding % (OKX advanced-info)
+    maxBotHoldersPct:  u.maxBotHoldersPct  ?? 30,  // max bot holder addresses % (Jupiter audit)
     maxTop10Pct:       u.maxTop10Pct       ?? 60,  // max top 10 holders concentration
+    blockedLaunchpads:  u.blockedLaunchpads  ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
+    minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum
+    maxTokenAgeHours:   u.maxTokenAgeHours   ?? null, // null = no maximum
+    athFilterPct:       u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
   },
 
   // ─── Position Management ────────────────
@@ -48,17 +53,20 @@ export const config = {
     outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 10,
     outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
-    emergencyPriceDropPct: u.emergencyPriceDropPct ?? -50,
-    stopLossPct:           u.stopLossPct           ?? -20,
+    stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
     takeProfitFeePct:      u.takeProfitFeePct      ?? 5,
-    trailingTakeProfit:    u.trailingTakeProfit    ?? true,
-    trailingTriggerPct:    u.trailingTriggerPct    ?? 3,
-    trailingDropPct:       u.trailingDropPct       ?? 1.5,
     minFeePerTvl24h:       u.minFeePerTvl24h       ?? 7,
+    minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
     minSolToOpen:          u.minSolToOpen          ?? 0.55,
     deployAmountSol:       u.deployAmountSol       ?? 0.5,
     gasReserve:            u.gasReserve            ?? 0.2,
     positionSizePct:       u.positionSizePct       ?? 0.35,
+    // Trailing take-profit
+    trailingTakeProfit:    u.trailingTakeProfit    ?? true,
+    trailingTriggerPct:    u.trailingTriggerPct    ?? 3,    // activate trailing at X% PnL
+    trailingDropPct:       u.trailingDropPct       ?? 1.5,  // close when drops X% from peak
+    // SOL mode — positions, PnL, and balances reported in SOL instead of USD
+    solMode:               u.solMode               ?? false,
   },
 
   // ─── Strategy Mapping ───────────────────
@@ -135,8 +143,13 @@ export function reloadScreeningThresholds() {
     if (fresh.minVolume      != null) s.minVolume      = fresh.minVolume;
     if (fresh.minBinStep     != null) s.minBinStep     = fresh.minBinStep;
     if (fresh.maxBinStep     != null) s.maxBinStep     = fresh.maxBinStep;
-    if (fresh.timeframe      != null) s.timeframe      = fresh.timeframe;
-    if (fresh.category       != null) s.category       = fresh.category;
+    if (fresh.timeframe         != null) s.timeframe         = fresh.timeframe;
+    if (fresh.category          != null) s.category          = fresh.category;
+    if (fresh.minTokenAgeHours  !== undefined) s.minTokenAgeHours = fresh.minTokenAgeHours;
+    if (fresh.maxTokenAgeHours  !== undefined) s.maxTokenAgeHours = fresh.maxTokenAgeHours;
+    if (fresh.athFilterPct      !== undefined) s.athFilterPct     = fresh.athFilterPct;
+    if (fresh.maxBundlePct      != null) s.maxBundlePct     = fresh.maxBundlePct;
+    if (fresh.maxBotHoldersPct  != null) s.maxBotHoldersPct = fresh.maxBotHoldersPct;
   } catch { /* ignore */ }
 }
 

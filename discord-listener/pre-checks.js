@@ -88,7 +88,7 @@ export async function resolvePool(address) {
 
 // Stage 4: Rug check via rugcheck.xyz
 export async function rugCheck(mint) {
-  if (!mint) return { pass: true, rug_score: null }; // can't check without mint
+  if (!mint) return { pass: true, rug_score: null };
   try {
     const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, { timeout: 10000 });
     const data = res.data;
@@ -125,8 +125,7 @@ export async function deployerCheck(poolAddress) {
   return { pass: true };
 }
 
-// Stage 6: Global fees check — priority + jito tips via Jupiter ChainInsight API
-// Reads minTokenFeesSol from user-config.json (same threshold executor.js uses before deploy)
+// Stage 6: Global fees check — reads minTokenFeesSol from user-config.json
 export async function feesCheck(mint) {
   if (!mint) return { pass: true, global_fees_sol: null };
 

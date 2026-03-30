@@ -1,16 +1,60 @@
 import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
+import { jsonrepair } from "jsonrepair";
 import { buildSystemPrompt } from "./prompt.js";
 import { executeTool } from "./tools/executor.js";
 import { tools } from "./tools/definitions.js";
 
 const MANAGER_TOOLS  = new Set(["close_position", "claim_fees", "swap_token", "update_config", "get_position_pnl", "get_my_positions", "set_position_note", "add_pool_note", "get_wallet_balance"]);
-const SCREENER_TOOLS = new Set(["deploy_position", "get_active_bin", "get_top_candidates", "check_smart_wallets_on_pool", "get_token_holders", "get_token_narrative", "get_token_info", "search_pools", "get_pool_memory", "add_pool_note", "add_to_blacklist", "update_config", "get_wallet_balance", "get_my_positions", "get_pool_ohlcv"]);
+const SCREENER_TOOLS = new Set(["deploy_position", "get_active_bin", "get_top_candidates", "check_smart_wallets_on_pool", "get_token_holders", "get_token_narrative", "get_token_info", "search_pools", "get_pool_memory", "add_pool_note", "add_to_blacklist", "update_config", "get_wallet_balance", "get_my_positions"]);
 
-function getToolsForRole(agentType) {
+// Intent → tool subsets for GENERAL role
+const INTENT_TOOLS = {
+  deploy:    new Set(["deploy_position", "get_top_candidates", "get_active_bin", "get_pool_memory", "check_smart_wallets_on_pool", "get_token_holders", "get_token_narrative", "get_token_info", "search_pools", "get_wallet_balance", "get_my_positions", "add_pool_note"]),
+  close:     new Set(["close_position", "get_my_positions", "get_position_pnl", "get_wallet_balance", "swap_token"]),
+  claim:     new Set(["claim_fees", "get_my_positions", "get_position_pnl", "get_wallet_balance"]),
+  swap:      new Set(["swap_token", "get_wallet_balance"]),
+  config:    new Set(["update_config"]),
+  blocklist: new Set(["add_to_blacklist", "remove_from_blacklist", "list_blacklist", "block_deployer", "unblock_deployer", "list_blocked_deployers"]),
+  selfupdate: new Set(["self_update"]),
+  balance:   new Set(["get_wallet_balance", "get_my_positions"]),
+  positions: new Set(["get_my_positions", "get_position_pnl", "get_wallet_balance", "set_position_note"]),
+  blacklist: new Set(["add_to_blacklist", "remove_from_blacklist", "list_blacklist"]),
+  strategy:  new Set(["list_strategies", "get_strategy", "add_strategy", "update_strategy", "delete_strategy", "set_active_strategy"]),
+  screen:    new Set(["get_top_candidates", "get_token_holders", "get_token_narrative", "get_token_info", "search_pools", "check_smart_wallets_on_pool", "get_pool_detail", "get_my_positions"]),
+  memory:    new Set(["get_pool_memory", "add_pool_note", "list_blacklist", "add_to_blacklist", "remove_from_blacklist"]),
+};
+
+const INTENT_PATTERNS = [
+  { intent: "deploy",    re: /\b(deploy|open|add liquidity|lp into|invest in)\b/i },
+  { intent: "close",     re: /\b(close|exit|withdraw|remove liquidity|shut down)\b/i },
+  { intent: "claim",     re: /\b(claim|harvest|collect)\b.*\bfee/i },
+  { intent: "swap",      re: /\b(swap|convert|sell|exchange)\b/i },
+  { intent: "selfupdate", re: /\b(self.?update|git pull|pull latest|update (the )?bot|update (the )?agent|update yourself)\b/i },
+  { intent: "blocklist",  re: /\b(blacklist|block|unblock|blocklist|blocked deployer|rugger|block dev|block deployer)\b/i },
+  { intent: "config",    re: /\b(config|setting|threshold|update|set |change)\b/i },
+  { intent: "balance",   re: /\b(balance|wallet|sol|how much)\b/i },
+  { intent: "positions", re: /\b(position|portfolio|open|pnl|yield|range)\b/i },
+  { intent: "blacklist", re: /\b(blacklist|block|ban)\b/i },
+  { intent: "strategy",  re: /\b(strategy|strategies)\b/i },
+  { intent: "screen",    re: /\b(screen|candidate|find pool|search|research)\b/i },
+  { intent: "memory",    re: /\b(memory|pool history|note|remember)\b/i },
+];
+
+function getToolsForRole(agentType, goal = "") {
   if (agentType === "MANAGER")  return tools.filter(t => MANAGER_TOOLS.has(t.function.name));
   if (agentType === "SCREENER") return tools.filter(t => SCREENER_TOOLS.has(t.function.name));
-  return tools;
+
+  // GENERAL: match intent from goal, combine matched tool sets
+  const matched = new Set();
+  for (const { intent, re } of INTENT_PATTERNS) {
+    if (re.test(goal)) {
+      for (const t of INTENT_TOOLS[intent]) matched.add(t);
+    }
+  }
+
+  // Fall back to all tools if no intent matched
+  if (matched.size === 0) return tools;
+  return tools.filter(t => matched.has(t.function.name));
 }
 import { getWalletBalances } from "./tools/wallet.js";
 import { getMyPositions } from "./tools/dlmm.js";
@@ -27,25 +71,6 @@ const client = new OpenAI({
   timeout: 5 * 60 * 1000,
 });
 
-// Anthropic client — only initialised when ANTHROPIC_API_KEY is present
-// Set model to any claude-* model (e.g. claude-sonnet-4-6) to use this path
-const anthropicClient = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: 5 * 60 * 1000 })
-  : null;
-
-function isClaudeModel(model) {
-  return typeof model === "string" && model.startsWith("claude-") && !!anthropicClient;
-}
-
-// Convert OpenAI tool definitions to Anthropic format
-function toAnthropicTools(openaiTools) {
-  return openaiTools.map(t => ({
-    name: t.function.name,
-    description: t.function.description,
-    input_schema: t.function.parameters,
-  }));
-}
-
 const DEFAULT_MODEL = process.env.LLM_MODEL || "openrouter/healer-alpha";
 
 /**
@@ -55,23 +80,13 @@ const DEFAULT_MODEL = process.env.LLM_MODEL || "openrouter/healer-alpha";
  * @param {number} maxSteps - Safety limit on iterations (default 20)
  * @returns {string} - The agent's final text response
  */
-export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null, prefetched = {}) {
-  // Build dynamic system prompt with current portfolio state.
-  // Callers may pass pre-fetched data to avoid redundant RPC calls.
-  const [portfolio, positions] = (prefetched.portfolio && prefetched.positions)
-    ? [prefetched.portfolio, prefetched.positions]
-    : await Promise.all([getWalletBalances(), getMyPositions()]);
+export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null) {
+  // Build dynamic system prompt with current portfolio state
+  const [portfolio, positions] = await Promise.all([getWalletBalances(), getMyPositions()]);
   const stateSummary = getStateSummary();
   const lessons = getLessonsForPrompt({ agentType });
   const perfSummary = getPerformanceSummary();
   const systemPrompt = buildSystemPrompt(agentType, portfolio, positions, stateSummary, lessons, perfSummary);
-
-  const activeModel = model || DEFAULT_MODEL;
-
-  // Route to Anthropic when a claude-* model is requested and key is set
-  if (isClaudeModel(activeModel)) {
-    return runAnthropicLoop(goal, maxSteps, sessionHistory, agentType, activeModel, maxOutputTokens, systemPrompt);
-  }
 
   const messages = [
     { role: "system", content: systemPrompt },
@@ -79,21 +94,34 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
     { role: "user", content: goal },
   ];
 
+  // Track write tools fired this session — prevent the model from calling the same
+  // destructive tool twice (e.g. deploy twice, swap twice after auto-swap)
+  const ONCE_PER_SESSION = new Set(["deploy_position", "swap_token", "close_position"]);
+  // These lock after first attempt regardless of success — retrying them is always wrong
+  const NO_RETRY_TOOLS = new Set(["deploy_position"]);
+  const firedOnce = new Set();
+
   let emptyStreak = 0;
   for (let step = 0; step < maxSteps; step++) {
     log("agent", `Step ${step + 1}/${maxSteps}`);
 
     try {
+      const activeModel = model || DEFAULT_MODEL;
+
       // Retry up to 3 times on transient provider errors (502, 503, 529)
       const FALLBACK_MODEL = "stepfun/step-3.5-flash:free";
       let response;
       let usedModel = activeModel;
+      // Force a tool call on step 0 for action intents — prevents model from hallucinating results
+      const ACTION_INTENTS = /\b(deploy|open|add liquidity|close|exit|withdraw|claim|swap|block|unblock)\b/i;
+      const toolChoice = (step === 0 && agentType === "GENERAL" && ACTION_INTENTS.test(goal)) ? "required" : "auto";
+
       for (let attempt = 0; attempt < 3; attempt++) {
         response = await client.chat.completions.create({
           model: usedModel,
           messages,
-          tools: getToolsForRole(agentType),
-          tool_choice: "auto",
+          tools: getToolsForRole(agentType, goal),
+          tool_choice: toolChoice,
           temperature: config.llm.temperature,
           max_tokens: maxOutputTokens ?? config.llm.maxTokens,
         });
@@ -118,6 +146,25 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
         throw new Error(`API returned no choices: ${response.error?.message || JSON.stringify(response)}`);
       }
       const msg = response.choices[0].message;
+      // Repair malformed tool call JSON before pushing to history —
+      // the API rejects the next request if history contains invalid JSON args
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.function?.arguments) {
+            try {
+              JSON.parse(tc.function.arguments);
+            } catch {
+              try {
+                tc.function.arguments = JSON.stringify(JSON.parse(jsonrepair(tc.function.arguments)));
+                log("warn", `Repaired malformed JSON args for ${tc.function.name}`);
+              } catch {
+                tc.function.arguments = "{}";
+                log("error", `Could not repair JSON args for ${tc.function.name} — cleared to {}`);
+              }
+            }
+          }
+        }
+      }
       messages.push(msg);
 
       // If the model didn't call any tools, it's done
@@ -135,17 +182,36 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
 
       // Execute each tool call in parallel
       const toolResults = await Promise.all(msg.tool_calls.map(async (toolCall) => {
-        const functionName = toolCall.function.name;
+        const functionName = toolCall.function.name.replace(/<.*$/, "").trim();
         let functionArgs;
 
         try {
           functionArgs = JSON.parse(toolCall.function.arguments);
-        } catch (parseError) {
-          log("error", `Failed to parse args for ${functionName}: ${parseError.message}`);
-          functionArgs = {};
+        } catch {
+          try {
+            functionArgs = JSON.parse(jsonrepair(toolCall.function.arguments));
+            log("warn", `Repaired malformed JSON args for ${functionName}`);
+          } catch (parseError) {
+            log("error", `Failed to parse args for ${functionName}: ${parseError.message}`);
+            functionArgs = {};
+          }
         }
 
+        // Block once-per-session tools from firing a second time
+        if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
+          log("agent", `Blocked duplicate ${functionName} call — already executed this session`);
+          return {
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: JSON.stringify({ blocked: true, reason: `${functionName} already attempted this session — do not retry. If it failed, report the error and stop.` }),
+          };
+        }
         const result = await executeTool(functionName, functionArgs);
+
+        // Lock deploy_position after first attempt regardless of outcome — retrying is never right
+        // For close/swap: only lock on success so genuine failures can be retried
+        if (NO_RETRY_TOOLS.has(functionName)) firedOnce.add(functionName);
+        else if (ONCE_PER_SESSION.has(functionName) && result.success === true) firedOnce.add(functionName);
 
         return {
           role: "tool",
@@ -165,89 +231,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
         continue;
       }
 
-      // Premature close / network drop — retry up to 3 times with backoff
-      const isPrematureClose = error.message?.toLowerCase().includes("premature close")
-        || error.message?.toLowerCase().includes("network")
-        || error.code === "ECONNRESET"
-        || error.code === "ECONNABORTED";
-      if (isPrematureClose && step < maxSteps - 1) {
-        const wait = 10000;
-        log("agent", `Premature close from provider, retrying in ${wait / 1000}s...`);
-        await sleep(wait);
-        continue;
-      }
-
       // For other errors, break the loop
-      throw error;
-    }
-  }
-
-  log("agent", "Max steps reached without final answer");
-  return { content: "Max steps reached. Review logs for partial progress.", userMessage: goal };
-}
-
-async function runAnthropicLoop(goal, maxSteps, sessionHistory, agentType, model, maxOutputTokens, systemPrompt) {
-  const anthropicTools = toAnthropicTools(getToolsForRole(agentType));
-
-  // sessionHistory is plain {role, content} pairs — compatible with Anthropic's format
-  const messages = [
-    ...sessionHistory,
-    { role: "user", content: goal },
-  ];
-
-  for (let step = 0; step < maxSteps; step++) {
-    log("agent", `Step ${step + 1}/${maxSteps} [Claude]`);
-
-    try {
-      const response = await anthropicClient.messages.create({
-        model,
-        system: systemPrompt,
-        messages,
-        tools: anthropicTools,
-        tool_choice: { type: "auto" },
-        temperature: config.llm.temperature,
-        max_tokens: maxOutputTokens ?? config.llm.maxTokens,
-      });
-
-      const toolUseBlocks = response.content.filter(b => b.type === "tool_use");
-      const textContent   = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-
-      // Add assistant turn to messages
-      messages.push({ role: "assistant", content: response.content });
-
-      if (response.stop_reason === "end_turn" || toolUseBlocks.length === 0) {
-        if (!textContent) {
-          messages.pop();
-          log("agent", "Empty response, retrying...");
-          continue;
-        }
-        log("agent", "Final answer reached");
-        log("agent", textContent);
-        return { content: textContent, userMessage: goal };
-      }
-
-      // Execute tool calls in parallel and send results back
-      const toolResults = await Promise.all(toolUseBlocks.map(async (block) => {
-        log("agent", `Tool call: ${block.name}`);
-        try {
-          const result = await executeTool(block.name, block.input);
-          return { type: "tool_result", tool_use_id: block.id, content: JSON.stringify(result) };
-        } catch (e) {
-          return { type: "tool_result", tool_use_id: block.id, content: `Error: ${e.message}`, is_error: true };
-        }
-      }));
-
-      messages.push({ role: "user", content: toolResults });
-
-    } catch (error) {
-      log("error", `Anthropic loop error at step ${step}: ${error.message}`);
-
-      if (error.status === 429) {
-        log("agent", "Rate limited, waiting 30s...");
-        await sleep(30000);
-        continue;
-      }
-
       throw error;
     }
   }

@@ -1,44 +1,28 @@
 # Position Management Cycle
 
-Run a complete management cycle to monitor and act on open positions.
+## Steps
 
-## Process
+1. `node cli.js positions` — list all open positions
+2. `node cli.js pnl ADDRESS` — get PnL for each (includes strategy + instruction fields)
+3. Apply strategy-specific rules
+4. Execute instruction overrides (highest priority)
 
-1. **List positions** — `node cli.js positions`
-2. **Get PnL for each** — `node cli.js pnl <ADDRESS>` (includes strategy and instruction fields)
-3. **Apply strategy rules** based on returned strategy type
-4. **Execute instruction overrides** if present (highest priority — always follow these)
+## Strategy Rules
 
-## Strategy-Specific Rules
+**custom_ratio_spot:** Close when OOR upside with >10% profit. Claim fees >$5 in-range.
 
-**custom_ratio_spot:**
-- Close when out-of-range upside with >10% profit (lock gains)
-- Close after extended downside OOR without volume recovery
-- Claim fees >$5 in-range
-- Close when total return (fees + PnL) reaches 10%
+**fee_compounding:** Reinvest claimed fees (>$5) back into liquidity. Close normally when OOR.
 
-**fee_compounding:**
-- Claim fees >$5 and reinvest back into liquidity
-- Close normally when out-of-range
+**single_sided_reseed:** Don't close on downside OOR if volume holds — withdraw and re-seed at new price with bid_ask.
 
-**single_sided_reseed:**
-- Do NOT close during downside OOR if token maintains volume
-- Instead: withdraw and re-seed at new price with "bid_ask" strategy
+**partial_harvest:** Extract 50% when total returns reach 10%, let remainder run.
 
-**partial_harvest:**
-- Extract 50% of position when total returns reach 10%
-- Let remainder continue
+**multi_layer:** Manage each sub-position independently using custom_ratio_spot rules.
 
-**multi_layer:**
-- Manage each sub-position independently using custom_ratio_spot rules
-
-## Global Override Conditions (apply regardless of strategy)
-
+## Global Override (any strategy)
 Close immediately when:
-- Out-of-range upside with PnL > 10%
-- Losses below -25% without recovery
-- Position > 2 hours old while out-of-range downside
+- OOR upside with PnL > 10%
+- Loss < -25% without recovery
+- Position > 2h old while OOR downside
 
-## Important
-
-All commands execute sequentially via Bash — never parallel or background execution.
+Execute all commands sequentially.

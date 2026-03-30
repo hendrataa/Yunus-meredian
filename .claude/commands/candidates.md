@@ -1,33 +1,26 @@
 ---
 description: Fetch top pool candidates and cross-reference OKX smart money signals
-argument-hint: [limit]
 ---
-Get pool candidates and evaluate with smart money signals:
-
-1. Fetch top candidates:
+1. Get pool candidates (limit 5):
 ```
 !`node cli.js candidates --limit 5`
 ```
 
-2. Cross-reference against OKX smart money signals on Solana:
+2. Cross-reference OKX smart money signals on Solana:
 ```
 !`onchainos signal list --chain solana --wallet-type 1`
 ```
 
-3. Check OKX trending tokens for context:
+3. Check OKX trending tokens:
 ```
 !`onchainos token trending --chain solana`
 ```
 
-Evaluate each candidate on:
-- fee/TVL ratio (higher is better, aim for >0.1)
+Rank candidates by:
+- fee/TVL ratio (higher = better, aim for >0.1)
 - organic score (min 60, prefer 70+)
+- OKX smart money conviction (soldRatioPercent <20% = strong buy signal, >80% = skip)
 - bot % (reject if >30%)
-- top10 holder concentration (flag if >60%)
-- price direction (favor stable or uptrending)
-- volume/TVL ratio
+- top10 holders (flag if >60%)
 
-If a candidate token appears in OKX smart money signals with soldRatioPercent < 20%, that's a strong conviction signal.
-Skip if smart money has already exited (soldRatioPercent > 80%).
-
-Provide ranked deployment recommendations with reasoning.
+Give ranked deployment recommendations with reasoning.
