@@ -16,6 +16,7 @@ import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./tools/token.js";
+import { isBusy, setBusy, isManagementBusy, setManagementBusy, isScreeningBusy, setScreeningBusy, appendHistory, sessionHistory } from "./session.js";
 
 log("startup", "DLMM LP Agent starting...");
 log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
@@ -55,8 +56,7 @@ function buildPrompt() {
 //  CRON DEFINITIONS
 // ═══════════════════════════════════════════
 let _cronTasks = [];
-let _managementBusy = false; // prevents overlapping management cycles
-let _screeningBusy = false;  // prevents overlapping screening cycles
+// _managementBusy / _screeningBusy now live in session.js (isManagementBusy / setManagementBusy etc.)
 let _screeningLastTriggered = 0; // epoch ms — prevents management from spamming screening
 let _pollTriggeredAt = 0; // epoch ms — cooldown for poller-triggered management
 
@@ -105,8 +105,8 @@ function stopCronJobs() {
 }
 
 export async function runManagementCycle({ silent = false } = {}) {
-  if (_managementBusy) return null;
-  _managementBusy = true;
+  if (isManagementBusy()) return null;
+  setManagementBusy(true);
   timers.managementLastRun = Date.now();
   log("cron", "Starting management cycle");
   let mgmtReport = null;
@@ -285,7 +285,7 @@ After executing, write a brief one-line result per position.
     log("cron_error", `Management cycle failed: ${error.message}`);
     mgmtReport = `Management cycle failed: ${error.message}`;
   } finally {
-    _managementBusy = false;
+    setManagementBusy(false);
     if (!silent && telegramEnabled()) {
       if (mgmtReport) sendMessage(`🔄 Management Cycle\n\n${stripThink(mgmtReport)}`).catch(() => { });
       for (const p of positions) {
@@ -299,11 +299,11 @@ After executing, write a brief one-line result per position.
 }
 
 export async function runScreeningCycle({ silent = false } = {}) {
-  if (_screeningBusy) {
+  if (isScreeningBusy()) {
     log("cron", "Screening skipped — previous cycle still running");
     return null;
   }
-  _screeningBusy = true; // set immediately — prevents TOCTOU race with concurrent callers
+  setScreeningBusy(true); // set immediately — prevents TOCTOU race with concurrent callers
   _screeningLastTriggered = Date.now();
 
   // Hard guards — don't even run the agent if preconditions aren't met
@@ -312,18 +312,18 @@ export async function runScreeningCycle({ silent = false } = {}) {
     [prePositions, preBalance] = await Promise.all([getMyPositions({ force: true }), getWalletBalances()]);
     if (prePositions.total_positions >= config.risk.maxPositions) {
       log("cron", `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions})`);
-      _screeningBusy = false;
+      setScreeningBusy(false);
       return null;
     }
     const minRequired = config.management.deployAmountSol + config.management.gasReserve;
     if (preBalance.sol < minRequired) {
       log("cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
-      _screeningBusy = false;
+      setScreeningBusy(false);
       return null;
     }
   } catch (e) {
     log("cron_error", `Screening pre-check failed: ${e.message}`);
-    _screeningBusy = false;
+    setScreeningBusy(false);
     return null;
   }
   timers.screeningLastRun = Date.now();
@@ -450,7 +450,7 @@ STEPS:
     log("cron_error", `Screening cycle failed: ${error.message}`);
     screenReport = `Screening cycle failed: ${error.message}`;
   } finally {
-    _screeningBusy = false;
+    setScreeningBusy(false);
     if (!silent && telegramEnabled()) {
       if (screenReport) sendMessage(`🔍 Screening Cycle\n\n${stripThink(screenReport)}`).catch(() => { });
     }
@@ -462,7 +462,7 @@ export function startCronJobs() {
   stopCronJobs(); // stop any running tasks before (re)starting
 
   const mgmtTask = cron.schedule(`*/${Math.max(1, config.schedule.managementIntervalMin)} * * * *`, async () => {
-    if (_managementBusy) return;
+    if (isManagementBusy()) return;
     timers.managementLastRun = Date.now();
     await runManagementCycle();
   });
@@ -470,8 +470,8 @@ export function startCronJobs() {
   const screenTask = cron.schedule(`*/${Math.max(1, config.schedule.screeningIntervalMin)} * * * *`, runScreeningCycle);
 
   const healthTask = cron.schedule(`0 * * * *`, async () => {
-    if (_managementBusy) return;
-    _managementBusy = true;
+    if (isManagementBusy()) return;
+    setManagementBusy(true);
     log("cron", "Starting health check");
     try {
       await agentLoop(`
@@ -482,7 +482,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
     } catch (error) {
       log("cron_error", `Health check failed: ${error.message}`);
     } finally {
-      _managementBusy = false;
+      setManagementBusy(false);
     }
   });
 
@@ -499,7 +499,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
   // Lightweight 30s PnL poller — updates trailing TP state between management cycles, no LLM
   let _pnlPollBusy = false;
   const pnlPollInterval = setInterval(async () => {
-    if (_managementBusy || _screeningBusy || _pnlPollBusy) return;
+    if (isManagementBusy() || isScreeningBusy() || _pnlPollBusy) return;
     _pnlPollBusy = true;
     try {
       const result = await getMyPositions({ force: true, silent: true }).catch(() => null);
@@ -571,20 +571,9 @@ function formatCandidates(candidates) {
 // ═══════════════════════════════════════════
 const isTTY = process.stdin.isTTY;
 let cronStarted = false;
-let busy = false;
+// busy / sessionHistory / appendHistory now live in session.js
 let rl = null; // set in TTY mode, null in Non-TTY
 const _telegramQueue = []; // queued messages received while agent was busy
-const sessionHistory = []; // persists conversation across REPL turns
-const MAX_HISTORY = 20;    // keep last 20 messages (10 exchanges)
-
-function appendHistory(userMsg, assistantMsg) {
-  sessionHistory.push({ role: "user", content: userMsg });
-  sessionHistory.push({ role: "assistant", content: assistantMsg });
-  // Trim to last MAX_HISTORY messages
-  if (sessionHistory.length > MAX_HISTORY) {
-    sessionHistory.splice(0, sessionHistory.length - MAX_HISTORY);
-  }
-}
 
 // Register restarter — when update_config changes intervals, running cron jobs get replaced
 registerCronRestarter(() => { if (cronStarted) startCronJobs(); });
@@ -593,14 +582,14 @@ registerCronRestarter(() => { if (cronStarted) startCronJobs(); });
 //  TELEGRAM HANDLER (used in both TTY + Non-TTY)
 // ═══════════════════════════════════════════
 async function drainTelegramQueue() {
-  while (_telegramQueue.length > 0 && !_managementBusy && !_screeningBusy && !busy) {
+  while (_telegramQueue.length > 0 && !isManagementBusy() && !isScreeningBusy() && !isBusy()) {
     const queued = _telegramQueue.shift();
     await telegramHandler(queued);
   }
 }
 
 async function telegramHandler(text) {
-  if (_managementBusy || _screeningBusy || busy) {
+  if (isManagementBusy() || isScreeningBusy() || isBusy()) {
     if (_telegramQueue.length < 5) {
       _telegramQueue.push(text);
       sendMessage(`⏳ Queued (${_telegramQueue.length} in queue): "${text.slice(0, 60)}"`).catch(() => {});
@@ -667,7 +656,7 @@ async function telegramHandler(text) {
     return;
   }
 
-  busy = true;
+  setBusy(true);
   try {
     log("telegram", `Incoming: ${text}`);
     const hasCloseIntent = /\bclose\b|\bsell\b|\bexit\b|\bwithdraw\b/i.test(text);
@@ -679,7 +668,7 @@ async function telegramHandler(text) {
   } catch (e) {
     await sendMessage(`Error: ${e.message}`).catch(() => { });
   } finally {
-    busy = false;
+    setBusy(false);
     if (rl) { rl.setPrompt(buildPrompt()); rl.prompt(true); }
     drainTelegramQueue().catch(() => {});
   }
@@ -694,7 +683,7 @@ if (isTTY) {
 
   // Update prompt countdown every 10 seconds
   setInterval(() => {
-    if (!busy) {
+    if (!isBusy()) {
       rl.setPrompt(buildPrompt());
       rl.prompt(true); // true = preserve current line
     }
@@ -714,11 +703,11 @@ if (isTTY) {
   }
 
   async function runBusy(fn) {
-    if (busy) { console.log("Agent is busy, please wait..."); rl.prompt(); return; }
-    busy = true; rl.pause();
+    if (isBusy()) { console.log("Agent is busy, please wait..."); rl.prompt(); return; }
+    setBusy(true); rl.pause();
     try { await fn(); }
     catch (e) { console.error(`Error: ${e.message}`); }
-    finally { busy = false; rl.setPrompt(buildPrompt()); rl.resume(); rl.prompt(); }
+    finally { setBusy(false); rl.setPrompt(buildPrompt()); rl.resume(); rl.prompt(); }
   }
 
   // ── Startup: show wallet + top candidates ──
@@ -730,7 +719,7 @@ if (isTTY) {
 
   console.log("Fetching wallet and top pool candidates...\n");
 
-  busy = true;
+  setBusy(true);
   let startupCandidates = [];
 
   try {
@@ -760,7 +749,7 @@ if (isTTY) {
   } catch (e) {
     console.error(`Startup fetch failed: ${e.message}`);
   } finally {
-    busy = false;
+    setBusy(false);
   }
 
   // Always start autonomous cycles on launch

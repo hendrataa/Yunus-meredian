@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { log } from "./logger.js";
+import { on } from "./notifier.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -182,6 +183,32 @@ export async function notifyCycleSummary({ cycleType, positions, walletSol }) {
   );
 }
 
+
+// ─── Subscribe to notifier events ────────────────────────────────
+// Telegram receives all notifications via the pub/sub hub.
+// Guards with isEnabled() so nothing fires when TOKEN is missing.
+on("deploy", (data) => { if (isEnabled()) notifyDeploy(data).catch(() => {}); });
+on("close",  (data) => { if (isEnabled()) notifyClose(data).catch(() => {}); });
+on("out_of_range", (data) => { if (isEnabled()) notifyOutOfRange(data).catch(() => {}); });
+on("cycle:management", ({ report }) => { if (isEnabled()) sendMessage(`🔄 Management Cycle
+
+${report}`).catch(() => {}); });
+on("cycle:screening",  ({ report }) => { if (isEnabled()) sendMessage(`🔍 Screening Cycle
+
+${report}`).catch(() => {}); });
+on("briefing", ({ html }) => { if (isEnabled()) sendHTML(html).catch(() => {}); });
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+// ─── Subscribe to notifier events ────────────────────────────────
+// Telegram receives all notifications via the pub/sub hub.
+// Guards with isEnabled() so nothing fires when TOKEN is missing.
+import { on } from "./notifier.js";
+
+on("deploy", (data) => { if (isEnabled()) notifyDeploy(data).catch(() => {}); });
+on("close",  (data) => { if (isEnabled()) notifyClose(data).catch(() => {}); });
+on("out_of_range", (data) => { if (isEnabled()) notifyOutOfRange(data).catch(() => {}); });
+on("cycle:management", ({ report }) => { if (isEnabled()) sendMessage(`🔄 Management Cycle\n\n${report}`).catch(() => {}); });
+on("cycle:screening",  ({ report }) => { if (isEnabled()) sendMessage(`🔍 Screening Cycle\n\n${report}`).catch(() => {}); });
+on("briefing", ({ html }) => { if (isEnabled()) sendHTML(html).catch(() => {}); });
