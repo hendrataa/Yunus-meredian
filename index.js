@@ -17,6 +17,7 @@ import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memor
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./tools/token.js";
 import { isBusy, setBusy, isManagementBusy, setManagementBusy, isScreeningBusy, setScreeningBusy, appendHistory, sessionHistory } from "./session.js";
+import { startCopytradeWatcher } from "./copytrade-watcher.js";
 
 log("startup", "DLMM LP Agent starting...");
 log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
@@ -696,6 +697,7 @@ if (isTTY) {
       timers.managementLastRun = Date.now();
       timers.screeningLastRun = Date.now();
       startCronJobs();
+      startCopytradeWatcher();
       console.log("Autonomous cycles are now running.\n");
       rl.setPrompt(buildPrompt());
       rl.prompt(true);
@@ -974,6 +976,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
   startCronJobs();
   maybeRunMissedBriefing().catch(() => { });
   startPolling(telegramHandler); // Telegram chat support in PM2 mode
+  startCopytradeWatcher();       // Real-time wallet mirroring
   (async () => {
     try {
       await agentLoop(`

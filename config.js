@@ -92,6 +92,14 @@ export const config = {
     generalModel:    u.generalModel    ?? process.env.LLM_MODEL ?? "openrouter/healer-alpha",
   },
 
+  // ─── Copytrade ──────────────────────────
+  copytrade: {
+    // Set to true to enable real-time wallet mirroring
+    enabled:   u.copytradeEnabled   ?? false,
+    // Fixed SOL amount per copied position. null = use computeDeployAmount()
+    amountSol: u.copytradeAmountSol ?? null,
+  },
+
   // ─── Common Token Mints ────────────────
   tokens: {
     SOL:  "So11111111111111111111111111111111111111112",

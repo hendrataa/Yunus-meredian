@@ -187,6 +187,14 @@ export async function notifyCycleSummary({ cycleType, positions, walletSol }) {
 // ─── Subscribe to notifier events ────────────────────────────────
 // Telegram receives all notifications via the pub/sub hub.
 // Guards with isEnabled() so nothing fires when TOKEN is missing.
+on("copytrade_detected", ({ source, pool, amountSol, sig }) => {
+  if (isEnabled()) sendHTML(
+    `🪞 <b>CopyTrade</b> — mirroring ${source}\n` +
+    `Pool: <code>${pool.slice(0, 8)}...</code>\n` +
+    `Amount: ${amountSol} SOL\n` +
+    `Sig: <code>${sig.slice(0, 20)}...</code>`
+  ).catch(() => {});
+});
 on("deploy", (data) => { if (isEnabled()) notifyDeploy(data).catch(() => {}); });
 on("close",  (data) => { if (isEnabled()) notifyClose(data).catch(() => {}); });
 on("out_of_range", (data) => { if (isEnabled()) notifyOutOfRange(data).catch(() => {}); });
