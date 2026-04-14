@@ -128,7 +128,35 @@ export function startPolling(onMessage) {
   if (!TOKEN) return;
   _polling = true;
   poll(onMessage); // fire-and-forget
+  registerCommands().catch(() => {}); // set Telegram "/" menu
   log("telegram", "Bot polling started");
+}
+
+// ─── Register bot command menu ───────────────────────────────────
+async function registerCommands() {
+  if (!TOKEN) return;
+  const commands = [
+    { command: "positions",   description: "List all open positions with PnL" },
+    { command: "briefing",    description: "Show daily briefing (last 24h performance)" },
+    { command: "status",      description: "Refresh wallet balance + positions" },
+    { command: "candidates",  description: "Show top pool candidates" },
+    { command: "close",       description: "Close position — usage: /close 1" },
+    { command: "set",         description: "Set note on position — usage: /set 1 hold" },
+    { command: "learn",       description: "Study top LPers and save lessons" },
+    { command: "thresholds",  description: "Show screening thresholds + performance stats" },
+    { command: "evolve",      description: "Trigger threshold evolution from performance data" },
+    { command: "stop",        description: "Shut down the agent" },
+  ];
+  try {
+    const res = await fetch(`${BASE}/setMyCommands`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commands }),
+    });
+    if (res.ok) log("telegram", "Command menu registered");
+  } catch (e) {
+    log("telegram_error", `Failed to register commands: ${e.message}`);
+  }
 }
 
 export function stopPolling() {
