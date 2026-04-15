@@ -90,6 +90,56 @@ export function addCopytradeTarget(wallet) {
   log("copytrade", `Added live watch: ${wallet.name || wallet.address.slice(0, 8)}`);
 }
 
+// ─── Runtime toggle + status ─────────────────────────────────────
+
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+const _dir = path.dirname(fileURLToPath(import.meta.url));
+const _USER_CONFIG = path.join(_dir, "user-config.json");
+
+/**
+ * Enable or disable copytrade at runtime without restart.
+ * Persists the setting to user-config.json.
+ */
+export function toggleCopytrade(enable) {
+  config.copytrade.enabled = enable;
+  try {
+    const cfg = fs.existsSync(_USER_CONFIG)
+      ? JSON.parse(fs.readFileSync(_USER_CONFIG, "utf8"))
+      : {};
+    cfg.copytradeEnabled = enable;
+    fs.writeFileSync(_USER_CONFIG, JSON.stringify(cfg, null, 2));
+  } catch (e) {
+    log("copytrade_warn", `Failed to persist toggle: ${e.message}`);
+  }
+  if (enable) {
+    startCopytradeWatcher();
+  } else {
+    stopCopytradeWatcher();
+  }
+}
+
+/**
+ * Return a plain-text status summary for Telegram.
+ */
+export function getCopytradeStatus() {
+  const { wallets } = listSmartWallets();
+  const enabled = config.copytrade.enabled && _enabled;
+  const lines = [
+    `🪞 Copytrade: ${enabled ? "✅ Active" : "⏸ Disabled"}`,
+    `Watching: ${_subs.size}/${wallets.length} wallets`,
+    `Amount per copy: ${config.copytrade.amountSol ?? "auto (wallet %)"}  SOL`,
+  ];
+  if (wallets.length) {
+    lines.push("", "Wallets:");
+    wallets.forEach(w => lines.push(`  • ${w.name || w.address.slice(0, 8)} — ${w.address.slice(0, 8)}...`));
+  } else {
+    lines.push("", "No wallets — add via: add_smart_wallet");
+  }
+  return lines.join("\n");
+}
+
 // ─── Internal ────────────────────────────────────────────────────────────────
 
 function _subscribe(wallet) {

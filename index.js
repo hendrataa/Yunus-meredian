@@ -17,7 +17,7 @@ import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memor
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./tools/token.js";
 import { isBusy, setBusy, isManagementBusy, setManagementBusy, isScreeningBusy, setScreeningBusy, appendHistory, sessionHistory } from "./session.js";
-import { startCopytradeWatcher } from "./copytrade-watcher.js";
+import { startCopytradeWatcher, toggleCopytrade, getCopytradeStatus } from "./copytrade-watcher.js";
 
 log("startup", "DLMM LP Agent starting...");
 log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
@@ -597,6 +597,23 @@ async function telegramHandler(text) {
     } else {
       sendMessage("Queue is full (5 messages). Wait for the agent to finish.").catch(() => {});
     }
+    return;
+  }
+
+  if (text === "/copytrade") {
+    await sendMessage(getCopytradeStatus()).catch(() => {});
+    return;
+  }
+
+  if (text === "/copytrade_on") {
+    toggleCopytrade(true);
+    await sendMessage("🪞 Copytrade enabled — watching smart wallets for LP opens.").catch(() => {});
+    return;
+  }
+
+  if (text === "/copytrade_off") {
+    toggleCopytrade(false);
+    await sendMessage("⏸ Copytrade disabled.").catch(() => {});
     return;
   }
 

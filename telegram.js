@@ -136,16 +136,19 @@ export function startPolling(onMessage) {
 async function registerCommands() {
   if (!TOKEN) return;
   const commands = [
-    { command: "positions",   description: "List all open positions with PnL" },
-    { command: "briefing",    description: "Show daily briefing (last 24h performance)" },
-    { command: "status",      description: "Refresh wallet balance + positions" },
-    { command: "candidates",  description: "Show top pool candidates" },
-    { command: "close",       description: "Close position — usage: /close 1" },
-    { command: "set",         description: "Set note on position — usage: /set 1 hold" },
-    { command: "learn",       description: "Study top LPers and save lessons" },
-    { command: "thresholds",  description: "Show screening thresholds + performance stats" },
-    { command: "evolve",      description: "Trigger threshold evolution from performance data" },
-    { command: "stop",        description: "Shut down the agent" },
+    { command: "positions",      description: "List all open positions with PnL" },
+    { command: "briefing",       description: "Show daily briefing (last 24h performance)" },
+    { command: "status",         description: "Refresh wallet balance + positions" },
+    { command: "candidates",     description: "Show top pool candidates" },
+    { command: "close",          description: "Close position — usage: /close 1" },
+    { command: "set",            description: "Set note on position — usage: /set 1 hold" },
+    { command: "learn",          description: "Study top LPers and save lessons" },
+    { command: "thresholds",     description: "Show screening thresholds + performance stats" },
+    { command: "evolve",         description: "Trigger threshold evolution from performance data" },
+    { command: "copytrade_on",   description: "Enable copytrade watcher (mirrors smart wallets)" },
+    { command: "copytrade_off",  description: "Disable copytrade watcher" },
+    { command: "copytrade",      description: "Show copytrade status + watched wallets" },
+    { command: "stop",           description: "Shut down the agent" },
   ];
   try {
     const res = await fetch(`${BASE}/setMyCommands`, {
